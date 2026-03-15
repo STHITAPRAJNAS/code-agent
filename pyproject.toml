@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-agent"
+version = "0.1.0"
+description = "A Staff Software Engineer AI agent — builds projects, analyzes codebases, reviews PRs, debugs issues"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Code Agent" }]
+dependencies = [
+    "google-adk>=1.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.27.0",
+    "gitpython>=3.1.0",
+    "anyio>=4.0.0",
+    "sse-starlette>=2.1.0",
+]
+
+[project.scripts]
+code-agent = "code_agent.a2a.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["code_agent"]
