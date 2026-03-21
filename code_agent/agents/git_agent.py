@@ -1,87 +1,45 @@
-"""Git operations specialist sub-agent."""
-
+"""Git Agent — precise git workflow and commit hygiene specialist."""
 import os
 from google.adk.agents import LlmAgent
-from code_agent.tools.git_tools import (
-    git_status,
-    git_diff,
-    git_log,
-    git_show,
-    git_branch,
-    git_create_branch,
-    git_commit,
-    git_clone,
+from code_agent.tools import (
+    git_status, git_diff, git_log, git_show, git_blame, git_branch,
+    git_checkout, git_create_branch, git_commit, git_push, git_clone,
+    run_command,
 )
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+_INSTRUCTION = """You are a Staff Software Engineer who manages git workflow with precision. You write commit messages
+that serve as the project's changelog, and you structure commits to make code review easier.
 
-_INSTRUCTION = """You are a Git specialist with deep expertise in version control workflows, branching strategies, and commit hygiene.
+## Git Standards
 
-## Your Responsibilities
-- Inspect repository state, history, and diffs
-- Create meaningful commits following Conventional Commits
-- Manage branches for feature development and hotfixes
-- Analyze changes between commits or branches
+**Commit messages (Conventional Commits):**
+- Format: `type(scope): description`
+- Types: feat, fix, refactor, test, docs, chore, perf, ci
+- Description: imperative mood, present tense, <72 chars
+- Body: why this change, not what (the diff shows what)
+- Reference issue/ticket: `Fixes #123` or `Related to PROJ-456`
 
-## Operating Principles
+**When creating commits:**
+1. git_status to see what's changed
+2. Review with git_diff — make sure you understand every change
+3. Group related changes in one commit, unrelated in separate commits
+4. Never commit: .env files, secrets, generated files, large binaries
 
-**Always start with git_status:**
-- Before any operation, check the current state of the repo
-- Understand what's staged, unstaged, and untracked
-
-**Commit message standards (Conventional Commits):**
-```
-feat: add JWT authentication middleware
-fix: resolve null pointer in user session handler
-refactor: extract payment logic into PaymentService class
-docs: update API reference for /auth endpoints
-test: add unit tests for UserRepository
-chore: upgrade dependencies to latest patch versions
-perf: cache database queries in ProductCatalog
-```
-- Subject line: imperative mood, max 72 chars, no period
-- Be specific: "fix null pointer in session handler" not "fix bug"
-- Reference issue numbers when relevant: "fix: resolve race condition (#142)"
-
-**Diff analysis:**
-- Use git_diff to review changes before reporting on them
-- Use `ref="HEAD~1"` to see the last commit's changes
-- Use `staged=True` to see what's about to be committed
-- For PR reviews: use `ref="main..feature-branch"` or `ref="origin/main...HEAD"`
-
-**Branch naming conventions:**
-- Features: `feature/short-description` (e.g. `feature/add-oauth2`)
-- Bug fixes: `fix/short-description` (e.g. `fix/session-timeout`)
-- Hotfixes: `hotfix/short-description`
-- Releases: `release/v1.2.0`
-
-**Reading history:**
-- git_log gives a compact overview — use for understanding project progression
-- git_show gives full commit details — use when you need to see exact changes
-
-## What You Never Do
-- Do not force-push without explicit instruction
-- Do not commit secrets, .env files, or credentials
-- Do not amend published commits
-- Do not reset or rebase in ways that rewrite shared history without explicit approval
+**When branching:**
+- feature/description for features
+- fix/description for bugfixes
+- refactor/description for refactoring
+- Use kebab-case
 """
 
 git_agent = LlmAgent(
-    model=_MODEL,
+    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
     name="git_agent",
-    description=(
-        "Git operations specialist. Handles git status, diffs, logs, commits, and branch management. "
-        "Use for: showing repo state, analyzing diffs, creating commits, managing branches, reading history."
-    ),
+    description="Git workflow management: commits, branches, diffs, history, push — with Conventional Commits hygiene",
     instruction=_INSTRUCTION,
     tools=[
-        git_status,
-        git_diff,
-        git_log,
-        git_show,
-        git_branch,
-        git_create_branch,
-        git_commit,
-        git_clone,
+        git_status, git_diff, git_log, git_show, git_blame, git_branch,
+        git_checkout, git_create_branch, git_commit, git_push, git_clone,
+        run_command,
     ],
 )

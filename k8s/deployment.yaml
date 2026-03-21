@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-agent
+  labels:
+    app: code-agent
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: code-agent
+  template:
+    metadata:
+      labels:
+        app: code-agent
+    spec:
+      containers:
+      - name: code-agent
+        image: your-ecr-account.dkr.ecr.us-east-1.amazonaws.com/code-agent:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DEPLOYMENT_MODE
+          value: "eks"
+        - name: WORKSPACE_DIR
+          value: "/mnt/efs/workspaces"
+        - name: CHROMA_PATH
+          value: "/mnt/efs/chroma_db"
+        envFrom:
+        - secretRef:
+            name: code-agent-secrets   # contains GOOGLE_API_KEY, GITHUB_TOKEN, etc.
+        volumeMounts:
+        - name: efs-storage
+          mountPath: /mnt/efs
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: efs-storage
+        persistentVolumeClaim:
+          claimName: code-agent-efs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: code-agent-svc
+spec:
+  selector:
+    app: code-agent
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: code-agent-efs-pvc
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName: efs-sc   # EFS StorageClass
+  resources:
+    requests:
+      storage: 50Gi

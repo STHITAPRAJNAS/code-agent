@@ -4,14 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-agent"
-version = "0.1.0"
-description = "A Staff Software Engineer AI agent — builds projects, analyzes codebases, reviews PRs, debugs issues"
+version = "0.2.0"
+description = "Remote Staff Software Engineer AI agent — builds, analyzes, reviews, debugs software across GitHub and Bitbucket"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Code Agent" }]
 dependencies = [
     "google-adk>=1.0.0",
+    "google-genai>=1.0.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "python-dotenv>=1.0.0",
@@ -20,6 +21,35 @@ dependencies = [
     "gitpython>=3.1.0",
     "anyio>=4.0.0",
     "sse-starlette>=2.1.0",
+    # VCS
+    "PyGithub>=2.5.0",
+    "atlassian-python-api>=3.41.0",
+    "requests>=2.32.0",
+    # Indexing + search
+    "chromadb>=0.5.0",
+    "tree-sitter>=0.23.0",
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-javascript>=0.23.0",
+    "tree-sitter-typescript>=0.23.0",
+    "tree-sitter-java>=0.23.0",
+    "tree-sitter-go>=0.23.0",
+    "tree-sitter-rust>=0.23.0",
+    "tree-sitter-ruby>=0.23.0",
+    "tree-sitter-c>=0.23.0",
+    "tree-sitter-cpp>=0.23.0",
+    # Security tools
+    "bandit>=1.7.0",
+    "pip-audit>=2.7.0",
+    # Jira / Confluence
+    "jira>=3.8.0",
+    # LlamaIndex RAG
+    "llama-index>=0.11.0",
+    "llama-index-embeddings-google>=0.3.0",
+    "llama-index-vector-stores-postgres>=0.2.0",
+    # Aurora PostgreSQL async
+    "asyncpg>=0.30.0",
+    "psycopg[binary,async]>=3.2.0",
+    "sqlalchemy[asyncio]>=2.0.0",
 ]
 
 [project.scripts]

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import time
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
 
 from code_agent.a2a.models import (
@@ -20,24 +21,81 @@ from code_agent.a2a.models import (
     TaskStatus,
     TextPart,
 )
+from code_agent.storage.session_factory import create_session_service
 
 if TYPE_CHECKING:
     from google.adk.agents import BaseAgent
 
+logger = logging.getLogger(__name__)
+
 _APP_NAME = "code_agent"
 
 
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
+
+async def _before_agent_callback(ctx) -> None:
+    """Log invocation start and load custom instructions into state."""
+    ctx.state["invocation_start_ms"] = int(time.time() * 1000)
+    logger.info("[%s] invocation=%s started", ctx.agent_name, ctx.invocation_id)
+    return None
+
+
+async def _after_agent_callback(ctx) -> None:
+    """Log invocation duration."""
+    start = ctx.state.get("invocation_start_ms", 0)
+    elapsed = int(time.time() * 1000) - start
+    logger.info("[%s] invocation=%s completed in %dms", ctx.agent_name, ctx.invocation_id, elapsed)
+    return None
+
+
+async def _before_tool_callback(ctx, tool_name: str, tool_args: dict):
+    """Block dangerous shell commands."""
+    if tool_name == "run_command":
+        cmd = tool_args.get("command", "")
+        dangerous = ["rm -rf /", ":(){ :|:& };:", "dd if=/dev/zero", "mkfs", "chmod -R 777 /"]
+        for d in dangerous:
+            if d in cmd:
+                logger.warning("[BLOCKED] dangerous command: %s", cmd)
+                return {"error": f"Blocked: potentially destructive command '{cmd[:60]}'"}
+    return None
+
+
+async def _after_tool_callback(ctx, tool_name: str, tool_args: dict, tool_response):
+    """Audit trail: track all tool calls in session state."""
+    audit = ctx.state.setdefault("tool_audit", [])
+    audit.append({"tool": tool_name, "args": {k: str(v)[:100] for k, v in tool_args.items()}})
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_session_id(session_id: str | None) -> str:
+    """Return session_id as-is if provided and non-empty, otherwise generate a new UUID4."""
+    if session_id and session_id.strip():
+        return session_id
+    return str(uuid4())
+
+
 class AgentRunner:
-    """Wraps ADK Runner + InMemorySessionService to execute the agent and manage A2A tasks."""
+    """Wraps ADK Runner + SessionService to execute the agent and manage A2A tasks."""
 
     def __init__(self, agent: "BaseAgent") -> None:
         self._agent = agent
-        self._session_service = InMemorySessionService()
+        self._session_service = create_session_service()
         self._runner = Runner(
             agent=agent,
-            app_name=_APP_NAME,
             session_service=self._session_service,
+            app_name="code_agent",
         )
+        # Attach callbacks to the root agent
+        agent.before_agent_callback = _before_agent_callback
+        agent.after_agent_callback = _after_agent_callback
+        agent.before_tool_callback = _before_tool_callback
+        agent.after_tool_callback = _after_tool_callback
         # In-memory task store: task_id -> Task
         self._tasks: dict[str, Task] = {}
         self._canceled: set[str] = set()
@@ -60,7 +118,7 @@ class AgentRunner:
     async def invoke(self, user_message: str, session_id: str | None = None) -> Task:
         """Run the agent synchronously and return a completed Task."""
         task_id = str(uuid4())
-        sid = session_id or str(uuid4())
+        sid = _ensure_session_id(session_id)
 
         # Create task record
         user_msg = Message.user(user_message)
@@ -107,7 +165,7 @@ class AgentRunner:
     ) -> AsyncGenerator[Task, None]:
         """Stream task state updates as the agent runs. Yields Task snapshots."""
         task_id = str(uuid4())
-        sid = session_id or str(uuid4())
+        sid = _ensure_session_id(session_id)
 
         user_msg = Message.user(user_message)
         task = Task(
