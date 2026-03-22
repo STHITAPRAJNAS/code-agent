@@ -1,0 +1,89 @@
+{
+  "name": "Code Agent",
+  "description": "A Staff Software Engineer AI agent powered by Claude. Builds projects from scratch, analyzes codebases, writes and modifies code, reviews PRs, debugs issues, runs security scans, writes documentation, indexes repos for semantic search, and manages Jira tickets. Works with GitHub and Bitbucket.",
+  "url": "http://localhost:8000/a2a/code_agent",
+  "version": "0.2.0",
+  "protocolVersion": "0.3.0",
+  "preferredTransport": "JSONRPC",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false,
+    "stateTransitionHistory": true
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "skills": [
+    {
+      "id": "analyze_codebase",
+      "name": "Analyze Codebase",
+      "description": "Understand an existing project's architecture, tech stack, patterns, and code quality. Supports semantic search after indexing.",
+      "tags": ["analyze", "understand", "overview", "architecture", "semantic search"]
+    },
+    {
+      "id": "review_pr",
+      "name": "Review Pull Request",
+      "description": "Perform a thorough code review of a GitHub or Bitbucket PR. Checks correctness, security (OWASP), performance, and maintainability. Can post the review directly to the PR.",
+      "tags": ["review", "PR", "code review", "diff", "security", "GitHub", "Bitbucket"]
+    },
+    {
+      "id": "implement_feature",
+      "name": "Implement Feature",
+      "description": "Implement a feature end-to-end: read the Jira ticket, understand the codebase, write the code, commit, create a PR, and update the ticket.",
+      "tags": ["implement", "feature", "code", "Jira", "PR"]
+    },
+    {
+      "id": "fix_bug",
+      "name": "Fix Bug",
+      "description": "Diagnose and fix a bug using root cause analysis. Traces stack traces, uses git blame, forms hypotheses, and applies minimal fixes.",
+      "tags": ["debug", "bug", "fix", "error", "stack trace", "root cause"]
+    },
+    {
+      "id": "refactor_code",
+      "name": "Refactor Code",
+      "description": "Refactor existing code to improve structure, readability, or performance while preserving behavior.",
+      "tags": ["refactor", "clean up", "restructure", "improve"]
+    },
+    {
+      "id": "design_architecture",
+      "name": "Design Architecture",
+      "description": "Design system architecture for new projects or propose improvements to existing ones. Produces directory trees, ADRs, data models, and API surfaces.",
+      "tags": ["architecture", "design", "ADR", "system design", "scaffold"]
+    },
+    {
+      "id": "security_review",
+      "name": "Security Review",
+      "description": "Perform a security review covering OWASP Top 10, secret exposure, dependency CVEs, and license compliance. Findings are CVSS-ranked.",
+      "tags": ["security", "OWASP", "CVE", "secrets", "vulnerability", "audit"]
+    },
+    {
+      "id": "write_tests",
+      "name": "Write Tests",
+      "description": "Write unit, integration, or end-to-end tests for existing code. Reads the code first to understand behavior, then writes tests covering edge cases.",
+      "tags": ["test", "unit test", "pytest", "jest", "coverage"]
+    },
+    {
+      "id": "search_code",
+      "name": "Search Code",
+      "description": "Search a codebase using semantic (meaning-based) or lexical (exact text) search. Requires the repo to be indexed for semantic search.",
+      "tags": ["search", "find", "grep", "semantic search", "symbol"]
+    },
+    {
+      "id": "scaffold_project",
+      "name": "Scaffold Project",
+      "description": "Create a new project from scratch with idiomatic directory structure, dependency manifest, configuration, entrypoint, and README.",
+      "tags": ["scaffold", "create", "new project", "boilerplate"]
+    },
+    {
+      "id": "update_jira",
+      "name": "Update Jira",
+      "description": "Read, create, update, or transition Jira issues. Add comments, change status, and link PRs to tickets.",
+      "tags": ["Jira", "ticket", "issue", "project management"]
+    },
+    {
+      "id": "index_repository",
+      "name": "Index Repository",
+      "description": "Index a local or remote repository for semantic search. After indexing, semantic_search and hybrid_search become available for that repo.",
+      "tags": ["index", "semantic search", "vector", "embeddings"]
+    }
+  ]
+}

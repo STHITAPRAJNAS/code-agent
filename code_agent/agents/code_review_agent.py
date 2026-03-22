@@ -1,12 +1,11 @@
 """Code review specialist sub-agent."""
 
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools.file_tools import read_file, search_in_files
 from code_agent.tools.git_tools import git_diff, git_show
 from code_agent.tools.code_tools import grep_code, get_file_outline, syntax_check
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 _INSTRUCTION = """You are a senior code reviewer with 10+ years of experience across security, performance, correctness, and maintainability. You review code with the precision of a principal engineer and the thoroughness of a security auditor.
 
@@ -99,7 +98,7 @@ What was done well — be specific and genuine. Good reviewers acknowledge quali
 """
 
 code_review_agent = LlmAgent(
-    model=_MODEL,
+    model=default_model(),
     name="code_review_agent",
     description=(
         "Senior code reviewer. Analyzes diffs and code for security vulnerabilities, bugs, performance issues, "

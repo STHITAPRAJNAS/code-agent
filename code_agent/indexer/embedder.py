@@ -1,8 +1,9 @@
 """Google Gemini embedding client for code chunks.
 
-Wraps ``google.generativeai`` to produce embeddings suitable for
-semantic code search, with exponential-backoff retry on rate-limit
-errors.
+Wraps ``google.genai`` (the new unified SDK bundled with google-adk) to
+produce embeddings suitable for semantic code search, with exponential-
+backoff retry on rate-limit errors.  Uses the Gemini API key
+(GOOGLE_API_KEY) — no GCP services.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ class CodeEmbedder:
         """Initialise the embedder.
 
         Args:
-            api_key:    Google API key.  Falls back to the ``GOOGLE_API_KEY``
+            api_key:    Google API key. Falls back to ``GOOGLE_API_KEY``
                         environment variable if not provided.
             model:      Gemini embedding model name.
             batch_size: Number of chunks to embed per API call.
@@ -53,13 +54,12 @@ class CodeEmbedder:
         resolved_key = api_key or os.environ.get("GOOGLE_API_KEY")
         if not resolved_key:
             raise RuntimeError(
-                "Google API key is required.  Set GOOGLE_API_KEY or pass api_key=."
+                "Google API key is required. Set GOOGLE_API_KEY or pass api_key=."
             )
 
-        import google.generativeai as genai  # type: ignore[import]
+        import google.genai as genai  # bundled by google-adk
 
-        genai.configure(api_key=resolved_key)
-        self._genai = genai
+        self._client = genai.Client(api_key=resolved_key)
         self.model = model
         self.batch_size = batch_size
 
@@ -70,7 +70,7 @@ class CodeEmbedder:
     def embed_chunks(self, chunks: list[CodeChunk]) -> list[list[float]]:
         """Embed a list of :class:`~code_agent.indexer.chunker.CodeChunk` objects.
 
-        Chunks are batched to stay within API request limits.  Each chunk
+        Chunks are batched to stay within API request limits. Each chunk
         is prefixed with ``file_path::symbol_name\\n`` so the model has
         location context during indexing.
 
@@ -128,7 +128,7 @@ class CodeEmbedder:
         """Call the Gemini embedding API with exponential-backoff retry.
 
         Args:
-            texts:     Texts to embed in a single API call.
+            texts:     Texts to embed (one API call per text).
             task_type: ``"RETRIEVAL_DOCUMENT"`` or ``"RETRIEVAL_QUERY"``.
 
         Returns:
@@ -137,49 +137,50 @@ class CodeEmbedder:
         Raises:
             RuntimeError: If all retries are exhausted.
         """
-        last_error: Exception | None = None
+        import google.genai.types as genai_types
 
-        for attempt in range(_MAX_RETRIES):
-            try:
-                result = self._genai.embed_content(
-                    model=self.model,
-                    content=texts,
-                    task_type=task_type,
-                )
-                # The SDK returns {"embedding": [...]} for single strings
-                # and {"embeddings": [...]} for lists.
-                if "embeddings" in result:
-                    return [e["values"] if isinstance(e, dict) else list(e) for e in result["embeddings"]]
-                if "embedding" in result:
-                    raw = result["embedding"]
-                    vec = raw["values"] if isinstance(raw, dict) else list(raw)
-                    return [vec]
-                raise RuntimeError(f"Unexpected embed_content response shape: {result.keys()}")
+        all_vectors: list[list[float]] = []
 
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-                err_str = str(exc).lower()
-                is_rate_limit = (
-                    "429" in err_str
-                    or "rate" in err_str
-                    or "quota" in err_str
-                    or "resource_exhausted" in err_str
-                )
-                if is_rate_limit and attempt < _MAX_RETRIES - 1:
-                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
-                    logger.warning(
-                        "Rate limit hit embedding batch (attempt %d/%d) — sleeping %.1fs: %s",
-                        attempt + 1, _MAX_RETRIES, delay, exc,
+        for text in texts:
+            last_error: Exception | None = None
+            for attempt in range(_MAX_RETRIES):
+                try:
+                    response = self._client.models.embed_content(
+                        model=self.model,
+                        contents=text,
+                        config=genai_types.EmbedContentConfig(task_type=task_type),
                     )
-                    time.sleep(delay)
-                else:
-                    logger.error(
-                        "Embedding error (attempt %d/%d): %s",
-                        attempt + 1, _MAX_RETRIES, exc,
-                    )
-                    if not is_rate_limit:
-                        break
+                    all_vectors.append(list(response.embeddings[0].values))
+                    break
 
-        raise RuntimeError(
-            f"Failed to embed after {_MAX_RETRIES} attempts: {last_error}"
-        )
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    err_str = str(exc).lower()
+                    is_rate_limit = (
+                        "429" in err_str
+                        or "rate" in err_str
+                        or "quota" in err_str
+                        or "resource_exhausted" in err_str
+                    )
+                    if is_rate_limit and attempt < _MAX_RETRIES - 1:
+                        delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "Rate limit hit (attempt %d/%d) — sleeping %.1fs: %s",
+                            attempt + 1, _MAX_RETRIES, delay, exc,
+                        )
+                        time.sleep(delay)
+                    else:
+                        logger.error(
+                            "Embedding error (attempt %d/%d): %s",
+                            attempt + 1, _MAX_RETRIES, exc,
+                        )
+                        if not is_rate_limit:
+                            raise RuntimeError(
+                                f"Failed to embed after {attempt + 1} attempts: {last_error}"
+                            )
+            else:
+                raise RuntimeError(
+                    f"Failed to embed after {_MAX_RETRIES} attempts: {last_error}"
+                )
+
+        return all_vectors

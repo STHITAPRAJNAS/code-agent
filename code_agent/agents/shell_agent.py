@@ -1,10 +1,9 @@
 """Shell execution specialist sub-agent."""
 
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools.shell_tools import run_command
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 _INSTRUCTION = """You are a shell execution specialist with expertise in running build systems, package managers, test runners, and development tools.
 
@@ -58,7 +57,7 @@ run_command("which python3 && python3 --version")
 """
 
 shell_agent = LlmAgent(
-    model=_MODEL,
+    model=default_model(),
     name="shell_agent",
     description=(
         "Shell execution specialist. Runs commands, build tools, test suites, package managers, and scripts. "

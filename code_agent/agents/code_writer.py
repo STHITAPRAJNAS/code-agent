@@ -1,6 +1,6 @@
 """Code Writer — production-quality code authoring specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     read_file, write_file, list_directory, find_files, search_in_files,
     extract_symbols, check_syntax, get_imports, get_file_outline,
@@ -36,14 +36,17 @@ After writing:
 - Report what was changed and why
 """
 
-code_writer_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    name="code_writer",
-    description="Production-quality code authoring: new files, feature additions, refactoring, style-consistent edits",
-    instruction=_INSTRUCTION,
-    tools=[
-        read_file, write_file, list_directory, find_files, search_in_files,
-        extract_symbols, check_syntax, get_imports, get_file_outline,
-        run_command, semantic_search, lexical_search, hybrid_search,
-    ],
-)
+def make_code_writer_agent() -> LlmAgent:
+    return LlmAgent(
+        model=default_model(),
+        name="code_writer",
+        description="Production-quality code authoring: new files, feature additions, refactoring, style-consistent edits",
+        instruction=_INSTRUCTION,
+        tools=[
+            read_file, write_file, list_directory, find_files, search_in_files,
+            extract_symbols, check_syntax, get_imports, get_file_outline,
+            run_command, semantic_search, lexical_search, hybrid_search,
+        ],
+    )
+
+code_writer_agent = make_code_writer_agent()

@@ -38,3 +38,13 @@ htmlcov/
 # Logs
 *.log
 logs/
+
+# ADK local session/artifact storage
+.adk/
+*/.adk/
+
+# Claude Code memory
+.claude/
+
+# Temp research artifacts
+adk_samples_research.md

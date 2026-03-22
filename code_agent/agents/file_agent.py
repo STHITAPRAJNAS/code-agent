@@ -1,7 +1,7 @@
 """File system specialist sub-agent."""
 
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools.file_tools import (
     read_file,
     write_file,
@@ -12,7 +12,6 @@ from code_agent.tools.file_tools import (
     get_file_info,
 )
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 _INSTRUCTION = """You are a file system specialist with deep expertise in navigating, reading, and modifying codebases.
 
@@ -51,7 +50,7 @@ _INSTRUCTION = """You are a file system specialist with deep expertise in naviga
 """
 
 file_agent = LlmAgent(
-    model=_MODEL,
+    model=default_model(),
     name="file_agent",
     description=(
         "File system specialist. Reads, writes, searches, and manages files and directories. "

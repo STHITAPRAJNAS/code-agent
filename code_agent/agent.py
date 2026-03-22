@@ -6,12 +6,19 @@ ADK looks for a `root_agent` variable in this module when you run:
   adk web code_agent
 """
 
-import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from google.adk.agents import LlmAgent
-from google.genai import types
 
+# Load .env then .env.local (overrides) from the project root.
+# Using absolute paths so this works when invoked via `adk web`, `adk run`,
+# or `python main.py` regardless of the working directory.
+_PROJECT_ROOT = Path(__file__).parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
+
+from code_agent.models import default_model
 from code_agent.agents.code_navigator import code_navigator_agent
 from code_agent.agents.code_writer import code_writer_agent
 from code_agent.agents.pr_reviewer import pr_reviewer_agent
@@ -21,6 +28,8 @@ from code_agent.agents.git_agent import git_agent
 from code_agent.agents.vcs_agent import vcs_agent
 from code_agent.agents.security_agent import security_agent
 from code_agent.agents.docs_agent import docs_agent
+from code_agent.pipelines.review_pipeline import pr_review_pipeline
+from code_agent.pipelines.feature_pipeline import feature_pipeline
 
 from code_agent.tools import (
     # File tools
@@ -40,6 +49,8 @@ from code_agent.tools import (
     # VCS tools
     list_repositories, clone_repository, get_pull_request, list_pull_requests,
     post_pr_review, create_pull_request, get_file_from_remote, get_repo_file_tree,
+    # Human-in-the-loop approval gates
+    request_pr_approval_tool, request_push_approval_tool,
     # Security tools
     run_security_scan, scan_dependencies, detect_secrets, check_license_compliance,
     # Jira / Confluence tools
@@ -47,9 +58,12 @@ from code_agent.tools import (
     get_confluence_page, update_confluence_page,
 )
 
-load_dotenv()
+async def _init_context(callback_context) -> None:
+    """Seed session state with defaults for instruction template variables."""
+    callback_context.state.setdefault("custom_instructions", "")
+    callback_context.state.setdefault("active_repo", "")
+    callback_context.state.setdefault("active_workspace", "")
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 _INSTRUCTION = """You are Alex, a Staff Software Engineer with 10+ years of experience across systems design, backend development, DevOps, code review, security, and technical documentation. You are precise, pragmatic, and thorough.
 
@@ -78,6 +92,8 @@ You have direct access to all tools and can handle tasks yourself. You also coor
 | **vcs_agent** | GitHub/Bitbucket API: list repos, fetch PRs, post reviews, create PRs, remote file access |
 | **security_agent** | OWASP Top 10, secret detection, dependency CVEs, license compliance, CVSS-ranked findings |
 | **docs_agent** | Docstrings, READMEs, architecture docs, ADRs, Mermaid diagrams |
+| **pr_review_pipeline** | End-to-end PR review: fetch diff → navigate context → structured review → security scan |
+| **feature_pipeline** | End-to-end feature: understand codebase → implement → update docs/tests → commit → create PR |
 
 ## Decision Making
 
@@ -89,6 +105,24 @@ Delegate to the appropriate sub-agent. Provide it with all the context it needs.
 
 **For complex multi-step tasks (build a project, add a feature, implement from ticket):**
 Break the task into steps, coordinate multiple agents in sequence, synthesize results.
+For end-to-end PR review delegate to pr_review_pipeline.
+For end-to-end feature implementation delegate to feature_pipeline.
+
+## MANDATORY: Irreversible Operations Require Human Approval
+
+You have access to two LongRunningFunctionTool approval gates that PAUSE execution
+until a human operator reviews and approves the action.
+
+**NEVER call git_push or create_pull_request directly.**
+
+| Operation | You MUST call first | Then only if approved |
+|---|---|---|
+| Push to remote | request_push_approval_tool | git_push |
+| Create a PR | request_pr_approval_tool | create_pull_request |
+
+When execution resumes after an approval gate:
+- `{"approved": true}` → proceed with the operation
+- `{"approved": false, "comment": "..."}` → abort and inform the user
 
 ## How You Work
 
@@ -178,15 +212,12 @@ Break the task into steps, coordinate multiple agents in sequence, synthesize re
 """
 
 root_agent = LlmAgent(
-    model=_MODEL,
+    model=default_model(),
     name="code_agent",
     description="Staff Software Engineer AI agent — builds, analyzes, reviews, debugs, secures, and documents software across GitHub, Bitbucket, and Jira",
     instruction=_INSTRUCTION,
     include_contents="default",
-    generate_content_config=types.GenerateContentConfig(
-        temperature=0.2,
-        max_output_tokens=8192,
-    ),
+    before_agent_callback=_init_context,
     sub_agents=[
         code_navigator_agent,
         code_writer_agent,
@@ -197,6 +228,9 @@ root_agent = LlmAgent(
         vcs_agent,
         security_agent,
         docs_agent,
+        # Orchestrated pipelines
+        pr_review_pipeline,
+        feature_pipeline,
     ],
     tools=[
         # File tools (direct access for quick operations)
@@ -216,6 +250,8 @@ root_agent = LlmAgent(
         # VCS
         list_repositories, clone_repository, get_pull_request, list_pull_requests,
         post_pr_review, create_pull_request, get_file_from_remote, get_repo_file_tree,
+        # Human-in-the-loop approval gates (LongRunningFunctionTool)
+        request_pr_approval_tool, request_push_approval_tool,
         # Security
         run_security_scan, scan_dependencies, detect_secrets, check_license_compliance,
         # Jira / Confluence

@@ -1,6 +1,6 @@
 """PR Reviewer — thorough, structured pull request review specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     get_pull_request, list_pull_requests, read_file, get_file_from_remote,
     get_repo_file_tree, semantic_search, lexical_search, hybrid_search,
@@ -51,15 +51,18 @@ want your own code reviewed: constructively, precisely, with clear reasoning.
 ```
 """
 
-pr_reviewer_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    name="pr_reviewer",
-    description="Structured pull request review: correctness, security, performance, maintainability, with inline comments",
-    instruction=_INSTRUCTION,
-    tools=[
-        get_pull_request, list_pull_requests, read_file, get_file_from_remote,
-        get_repo_file_tree, semantic_search, lexical_search, hybrid_search,
-        find_symbol_references, extract_symbols, run_security_scan,
-        scan_dependencies, post_pr_review, git_diff, git_log, get_file_outline,
-    ],
-)
+def make_pr_reviewer_agent() -> LlmAgent:
+    return LlmAgent(
+        model=default_model(),
+        name="pr_reviewer",
+        description="Structured pull request review: correctness, security, performance, maintainability, with inline comments",
+        instruction=_INSTRUCTION,
+        tools=[
+            get_pull_request, list_pull_requests, read_file, get_file_from_remote,
+            get_repo_file_tree, semantic_search, lexical_search, hybrid_search,
+            find_symbol_references, extract_symbols, run_security_scan,
+            scan_dependencies, post_pr_review, git_diff, git_log, get_file_outline,
+        ],
+    )
+
+pr_reviewer_agent = make_pr_reviewer_agent()

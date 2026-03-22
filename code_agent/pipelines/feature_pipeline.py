@@ -8,20 +8,20 @@ Feature Implementation Pipeline:
 """
 from google.adk.agents import SequentialAgent
 
-from code_agent.agents.vcs_agent import vcs_agent
-from code_agent.agents.code_navigator import code_navigator_agent
-from code_agent.agents.code_writer import code_writer_agent
-from code_agent.agents.docs_agent import docs_agent
-from code_agent.agents.git_agent import git_agent
+from code_agent.agents.code_navigator import make_code_navigator_agent
+from code_agent.agents.code_writer import make_code_writer_agent
+from code_agent.agents.docs_agent import make_docs_agent
+from code_agent.agents.git_agent import make_git_agent
+from code_agent.agents.vcs_agent import make_vcs_agent
 
 feature_pipeline = SequentialAgent(
     name="feature_pipeline",
     description="End-to-end feature implementation: Jira → understand → implement → test → PR",
     sub_agents=[
-        code_navigator_agent,   # understand codebase
-        code_writer_agent,      # implement feature
-        docs_agent,             # update docs/tests
-        git_agent,              # commit changes
-        vcs_agent,              # create PR
+        make_code_navigator_agent(), # understand codebase
+        make_code_writer_agent(),    # implement feature
+        make_docs_agent(),           # update docs/tests
+        make_git_agent(),            # commit changes
+        make_vcs_agent(),            # create PR
     ],
 )

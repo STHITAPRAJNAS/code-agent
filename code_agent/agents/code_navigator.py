@@ -1,6 +1,6 @@
 """Code Navigator — semantic codebase exploration specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     semantic_search, lexical_search, hybrid_search, find_symbol_references,
     index_local_repository, extract_symbols, get_symbol, get_imports,
@@ -39,15 +39,18 @@ precise questions about it.
 - Think in terms of: entry points, data models, service boundaries, external dependencies
 """
 
-code_navigator_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    name="code_navigator",
-    description="Semantic codebase exploration: symbol lookup, call tracing, architecture understanding, cross-repo search",
-    instruction=_INSTRUCTION,
-    tools=[
-        semantic_search, lexical_search, hybrid_search, find_symbol_references,
-        index_local_repository, extract_symbols, get_symbol, get_imports,
-        get_file_outline, grep_code, find_symbol, read_file, list_directory,
-        find_files, get_file_info, count_lines,
-    ],
-)
+def make_code_navigator_agent() -> LlmAgent:
+    return LlmAgent(
+        model=default_model(),
+        name="code_navigator",
+        description="Semantic codebase exploration: symbol lookup, call tracing, architecture understanding, cross-repo search",
+        instruction=_INSTRUCTION,
+        tools=[
+            semantic_search, lexical_search, hybrid_search, find_symbol_references,
+            index_local_repository, extract_symbols, get_symbol, get_imports,
+            get_file_outline, grep_code, find_symbol, read_file, list_directory,
+            find_files, get_file_info, count_lines,
+        ],
+    )
+
+code_navigator_agent = make_code_navigator_agent()

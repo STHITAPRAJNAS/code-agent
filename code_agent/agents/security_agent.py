@@ -1,6 +1,6 @@
 """Security Agent — vulnerability review and dependency scanning specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     run_security_scan, scan_dependencies, detect_secrets, check_license_compliance,
     read_file, grep_code, lexical_search, semantic_search, find_symbol_references,
@@ -35,15 +35,18 @@ of a penetration tester and the pragmatism of a developer who ships code.
 - Don't flag theoretical issues that require physical access or unrealistic conditions
 """
 
-security_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    name="security_agent",
-    description="Security review: OWASP Top 10, secret detection, dependency CVEs, license compliance, CVSS-ranked findings",
-    instruction=_INSTRUCTION,
-    disallow_transfer_to_parent=True,
-    tools=[
-        run_security_scan, scan_dependencies, detect_secrets, check_license_compliance,
-        read_file, grep_code, lexical_search, semantic_search, find_symbol_references,
-        extract_symbols, git_diff,
-    ],
-)
+def make_security_agent() -> LlmAgent:
+    return LlmAgent(
+        model=default_model(),
+        name="security_agent",
+        description="Security review: OWASP Top 10, secret detection, dependency CVEs, license compliance, CVSS-ranked findings",
+        instruction=_INSTRUCTION,
+        disallow_transfer_to_parent=True,
+        tools=[
+            run_security_scan, scan_dependencies, detect_secrets, check_license_compliance,
+            read_file, grep_code, lexical_search, semantic_search, find_symbol_references,
+            extract_symbols, git_diff,
+        ],
+    )
+
+security_agent = make_security_agent()

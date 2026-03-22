@@ -1,6 +1,6 @@
 """Docs Agent — developer documentation authoring specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     read_file, write_file, list_directory, find_files, extract_symbols,
     get_file_outline, get_imports, run_command, semantic_search,
@@ -37,15 +37,18 @@ useful. You know that documentation rots, so you write docs that are close to th
 4. Check: would a new team member understand this in their first week?
 """
 
-docs_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
-    name="docs_agent",
-    description="Documentation authoring: docstrings, READMEs, architecture docs, ADRs, Mermaid diagrams",
-    instruction=_INSTRUCTION,
-    disallow_transfer_to_parent=True,
-    tools=[
-        read_file, write_file, list_directory, find_files, extract_symbols,
-        get_file_outline, get_imports, run_command, semantic_search,
-        lexical_search, hybrid_search,
-    ],
-)
+def make_docs_agent() -> LlmAgent:
+    return LlmAgent(
+        model=default_model(),
+        name="docs_agent",
+        description="Documentation authoring: docstrings, READMEs, architecture docs, ADRs, Mermaid diagrams",
+        instruction=_INSTRUCTION,
+        disallow_transfer_to_parent=True,
+        tools=[
+            read_file, write_file, list_directory, find_files, extract_symbols,
+            get_file_outline, get_imports, run_command, semantic_search,
+            lexical_search, hybrid_search,
+        ],
+    )
+
+docs_agent = make_docs_agent()

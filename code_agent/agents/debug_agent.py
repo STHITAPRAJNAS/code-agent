@@ -1,12 +1,11 @@
 """Debugging specialist sub-agent."""
 
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools.file_tools import read_file, search_in_files
 from code_agent.tools.shell_tools import run_command
 from code_agent.tools.code_tools import grep_code, find_symbol, get_file_outline
 
-_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 _INSTRUCTION = """You are a debugging specialist — a methodical engineer who hunts bugs with evidence, not guesses. You trace execution paths, read actual code, and identify root causes before proposing fixes.
 
@@ -82,7 +81,7 @@ _INSTRUCTION = """You are a debugging specialist — a methodical engineer who h
 """
 
 debug_agent = LlmAgent(
-    model=_MODEL,
+    model=default_model(),
     name="debug_agent",
     description=(
         "Debugging specialist. Analyzes errors, stack traces, and unexpected behavior to find root causes and propose fixes. "

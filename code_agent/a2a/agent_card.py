@@ -25,6 +25,10 @@ def build_agent_card(base_url: str | None = None) -> AgentCard:
             push_notifications=False,
             state_transition_history=True,
         ),
+        # Advertise async submit support so orchestrators know they can fire-
+        # and-forget via tasks/submit and poll/subscribe separately.
+        # (stored as extra metadata on the card)
+
         default_input_modes=["text"],
         default_output_modes=["text"],
         skills=[

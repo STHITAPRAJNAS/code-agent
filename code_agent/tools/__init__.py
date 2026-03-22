@@ -112,6 +112,14 @@ from code_agent.tools.jira_tools import (
     update_confluence_page,
 )
 
+# ---------------------------------------------------------------------------
+# Human-in-the-loop approval gates (LongRunningFunctionTool)
+# ---------------------------------------------------------------------------
+from code_agent.tools.approval_tools import (
+    request_pr_approval_tool,
+    request_push_approval_tool,
+)
+
 __all__ = [
     # file tools
     "read_file",
@@ -173,4 +181,7 @@ __all__ = [
     "search_jira_issues",
     "get_confluence_page",
     "update_confluence_page",
+    # approval gates
+    "request_pr_approval_tool",
+    "request_push_approval_tool",
 ]

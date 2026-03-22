@@ -1,6 +1,6 @@
 """Debugger Agent — root cause analysis and bug-fixing specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     read_file, write_file, git_log, git_blame, git_diff, git_show,
     lexical_search, semantic_search, hybrid_search, find_symbol_references,
@@ -39,7 +39,7 @@ because you reason systematically about program state, not just symptoms.
 """
 
 debugger_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+    model=default_model(),
     name="debugger",
     description="Root cause analysis: stack trace investigation, git blame, hypothesis-driven debugging, minimal fixes",
     instruction=_INSTRUCTION,

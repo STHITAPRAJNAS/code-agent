@@ -1,6 +1,6 @@
 """Architect Agent — system design and technical architecture specialist."""
-import os
 from google.adk.agents import LlmAgent
+from code_agent.models import default_model
 from code_agent.tools import (
     read_file, write_file, list_directory, find_files, run_command,
     get_file_outline, extract_symbols, semantic_search, lexical_search,
@@ -35,7 +35,7 @@ simple for their requirements.
 """
 
 architect_agent = LlmAgent(
-    model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+    model=default_model(),
     name="architect",
     description="System design and architecture: new project structure, ADRs, data models, API surface, tech stack decisions",
     instruction=_INSTRUCTION,

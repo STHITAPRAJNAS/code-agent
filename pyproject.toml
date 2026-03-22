@@ -7,12 +7,12 @@ name = "code-agent"
 version = "0.2.0"
 description = "Remote Staff Software Engineer AI agent — builds, analyzes, reviews, debugs software across GitHub and Bitbucket"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.14"
 license = { text = "MIT" }
 authors = [{ name = "Code Agent" }]
 dependencies = [
-    "google-adk>=1.0.0",
-    "google-genai>=1.0.0",
+    "google-adk>=1.27.0",
+    "litellm>=1.40.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "python-dotenv>=1.0.0",
@@ -44,16 +44,17 @@ dependencies = [
     "jira>=3.8.0",
     # LlamaIndex RAG
     "llama-index>=0.11.0",
-    "llama-index-embeddings-google>=0.3.0",
     "llama-index-vector-stores-postgres>=0.2.0",
     # Aurora PostgreSQL async
     "asyncpg>=0.30.0",
     "psycopg[binary,async]>=3.2.0",
     "sqlalchemy[asyncio]>=2.0.0",
+    "a2a-sdk>=0.3.25",
 ]
 
 [project.scripts]
-code-agent = "code_agent.a2a.server:main"
+code-agent = "main:main"
+code-agent-a2a = "code_agent.a2a.server:main"
 
 [dependency-groups]
 dev = [

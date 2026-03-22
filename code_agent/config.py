@@ -47,10 +47,16 @@ class Settings:
     """
 
     # ------------------------------------------------------------------
-    # Google / Gemini
+    # LLM — configured via LiteLLM (default: Anthropic Claude)
+    # LLM_MODEL is a full LiteLLM model string, e.g. anthropic/claude-sonnet-4-6
+    # ------------------------------------------------------------------
+    ANTHROPIC_API_KEY: str | None
+    LLM_MODEL: str
+
+    # ------------------------------------------------------------------
+    # Google API key — used for Gemini embeddings only (not GCP services)
     # ------------------------------------------------------------------
     GOOGLE_API_KEY: str | None
-    GEMINI_MODEL: str
 
     # ------------------------------------------------------------------
     # GitHub
@@ -101,6 +107,9 @@ class Settings:
     APP_HOST: str
     APP_PORT: int
     LOG_LEVEL: str
+    # Optional API key for server auth — if set, callers must supply
+    # X-API-Key: <value> on every request.  Leave unset to disable auth.
+    API_KEY: str | None
 
     # ------------------------------------------------------------------
     # Deployment
@@ -108,13 +117,15 @@ class Settings:
     DEPLOYMENT_MODE: str
     DATABASE_URL: str
     PGVECTOR_TABLE: str
-    VERTEX_RAG_CORPUS: str
     RAG_BACKEND: str
 
     def __init__(self) -> None:
-        # Google / Gemini
+        # LLM (LiteLLM-backed, default: Anthropic Claude)
+        self.ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
+        self.LLM_MODEL = _env("LLM_MODEL", "anthropic/claude-sonnet-4-6") or "anthropic/claude-sonnet-4-6"
+
+        # Google API key (Gemini embeddings only)
         self.GOOGLE_API_KEY = _env("GOOGLE_API_KEY")
-        self.GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.0-flash") or "gemini-2.0-flash"
 
         # GitHub
         self.GITHUB_TOKEN = _env("GITHUB_TOKEN")
@@ -151,17 +162,17 @@ class Settings:
         self.APP_HOST = _env("APP_HOST", "0.0.0.0") or "0.0.0.0"
         self.APP_PORT = _env_int("APP_PORT", 8000)
         self.LOG_LEVEL = _env("LOG_LEVEL", "INFO") or "INFO"
+        self.API_KEY = _env("API_KEY")  # None → auth disabled
 
         # Deployment
         self.DEPLOYMENT_MODE = _env("DEPLOYMENT_MODE", "local") or "local"
         self.DATABASE_URL = _env("DATABASE_URL", "") or ""
         self.PGVECTOR_TABLE = _env("PGVECTOR_TABLE", "code_knowledge") or "code_knowledge"
-        self.VERTEX_RAG_CORPUS = _env("VERTEX_RAG_CORPUS", "") or ""
         self.RAG_BACKEND = _env("RAG_BACKEND", "llamaindex") or "llamaindex"
 
     def __repr__(self) -> str:  # pragma: no cover
         safe_fields = {
-            "GEMINI_MODEL": self.GEMINI_MODEL,
+            "LLM_MODEL": self.LLM_MODEL,
             "DEPLOYMENT_MODE": self.DEPLOYMENT_MODE,
             "RAG_BACKEND": self.RAG_BACKEND,
             "WORKSPACE_DIR": self.WORKSPACE_DIR,
@@ -187,6 +198,6 @@ def get_settings() -> Settings:
         from code_agent.config import get_settings
 
         cfg = get_settings()
-        print(cfg.GEMINI_MODEL)
+        print(cfg.CLAUDE_MODEL)
     """
     return Settings()

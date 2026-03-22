@@ -98,21 +98,15 @@ class RAGStore:
         logger.info("RAGStore: pgvector LlamaIndex index ready (Aurora)")
 
     def _get_embed_model(self):
-        """Build a LlamaIndex-compatible Google embedding model."""
+        """Build a LlamaIndex-compatible Google Gemini embedding model."""
         if self._embed_model:
             return self._embed_model
-        api_key = os.getenv("GOOGLE_API_KEY", "")
-        try:
-            from llama_index.embeddings.google import GoogleGenerativeAIEmbedding
-            return GoogleGenerativeAIEmbedding(
-                model_name="models/gemini-embedding-001",
-                api_key=api_key,
-                embed_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "50")),
-            )
-        except ImportError:
-            logger.warning("llama-index-embeddings-google not installed; using default embed model")
-            from llama_index.core.embeddings import resolve_embed_model
-            return resolve_embed_model("default")
+        from code_agent.storage.gemini_embedding import GeminiEmbedding
+        return GeminiEmbedding(
+            api_key=os.getenv("GOOGLE_API_KEY", ""),
+            model_name="gemini-embedding-001",
+            embed_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "50")),
+        )
 
     def add_chunks(self, chunks: list, metadata_extra: dict | None = None) -> None:
         """
