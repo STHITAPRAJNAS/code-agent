@@ -7,9 +7,20 @@ provides both:
                     /a2a/code_agent/.well-known/agent.json)
 
 Services are selected by DEPLOYMENT_MODE env var:
-  local (default) — InMemorySessionService, no external deps
-  eks             — DatabaseSessionService backed by Aurora
+  local (default) — InMemorySessionService + InMemoryTaskStore, no external deps
+  eks             — DatabaseSessionService + DatabaseTaskStore backed by Aurora
                     (requires DATABASE_URL)
+
+A2A task/push-notification stores
+----------------------------------
+ADK v1.27.x hardcodes ``InMemoryTaskStore`` in ``get_fast_api_app`` with no
+injection point.  ``patch_adk_stores()`` (see ``code_agent/a2a/stores.py``)
+monkey-patches the ``a2a.server.tasks`` module namespace before
+``get_fast_api_app`` is called so that DatabaseTaskStore and
+DatabasePushNotificationConfigStore are used when DATABASE_URL is set.
+
+Remove the patch once ADK exposes a native parameter.
+Track: https://github.com/google/adk-python/pull/3839
 
 Start the server:
   uv run python main.py
@@ -25,11 +36,16 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).parent
 load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
+
+# Patch A2A task/push-notification stores BEFORE importing get_fast_api_app so
+# that the monkey-patch is in place when ADK's `from a2a.server.tasks import
+# InMemoryTaskStore` executes inside get_fast_api_app at call time.
+from code_agent.a2a.stores import patch_adk_stores  # noqa: E402
+patch_adk_stores()
 
 from google.adk.cli.fast_api import get_fast_api_app  # noqa: E402
 
