@@ -1,4 +1,32 @@
-"""FastAPI A2A server — JSON-RPC 2.0 dispatcher with SSE streaming support.
+"""
+DEPRECATED — This module is no longer used and will be deleted.
+===============================================================
+
+All functionality has been migrated to ADK's ``get_fast_api_app`` in
+``main.py``, extended with persistent stores via ``code_agent/a2a/stores.py``.
+
+Why it was kept originally:
+  • ADK v1.x hardcoded ``InMemoryTaskStore`` with no injection point.
+  • Custom tasks/submit (fire-and-forget), tasks/resume (HITL), and
+    API-key auth middleware were not available in get_fast_api_app.
+
+Current state (see main.py + code_agent/a2a/stores.py):
+  • Persistent tasks/push-notification stores via patch_adk_stores(),
+    which monkey-patches the a2a.server.tasks module namespace before
+    get_fast_api_app is called so DatabaseTaskStore is used when
+    DATABASE_URL is set.
+  • Session persistence via session_service_uri=DATABASE_URL.
+  • ADK's built-in A2A handler covers tasks/send + tasks/sendSubscribe.
+
+Upstream tracking:
+  ADK PR #3839 — adds task_store param to to_a2a() (open, unmerged as of
+  2026-03).  Once get_fast_api_app exposes a native a2a_task_store param,
+  code_agent/a2a/stores.py can also be removed.
+
+TODO: delete this file once the migration is confirmed stable in EKS.
+----------------------------------------------------------------------
+
+FastAPI A2A server — JSON-RPC 2.0 dispatcher with SSE streaming support.
 
 Improvements over v0.2.0
 ─────────────────────────
