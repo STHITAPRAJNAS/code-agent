@@ -95,7 +95,7 @@ def to_a2a(
 ) -> Starlette:"""
 
 PATCH_1C_OLD = "  task_store = InMemoryTaskStore()"
-PATCH_1C_NEW = "  task_store = task_store or InMemoryTaskStore()"
+PATCH_1C_NEW = "  if task_store is None:\n    task_store = InMemoryTaskStore()"
 
 # ── Patch 2: fast_api.py — add a2a_task_store / a2a_push_config_store ────────
 
@@ -128,7 +128,7 @@ def main() -> None:
         f = _find_package_file(AGENT_TO_A2A_PKG)
         changed += _apply(f, PATCH_1A_OLD, PATCH_1A_NEW, "add TaskStore import")
         changed += _apply(f, PATCH_1B_OLD, PATCH_1B_NEW, "add task_store param to to_a2a()")
-        changed += _apply(f, PATCH_1C_OLD, PATCH_1C_NEW, "use task_store or InMemoryTaskStore()")
+        changed += _apply(f, PATCH_1C_OLD, PATCH_1C_NEW, "guard InMemoryTaskStore() with if task_store is None (exact PR #3839)")
     except Exception as exc:
         print(f"  [ERROR] {exc}")
         sys.exit(1)
