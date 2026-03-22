@@ -13,14 +13,13 @@ Services are selected by DEPLOYMENT_MODE env var:
 
 A2A task/push-notification stores
 ----------------------------------
-ADK v1.27.x hardcodes ``InMemoryTaskStore`` in ``get_fast_api_app`` with no
-injection point.  ``patch_adk_stores()`` (see ``code_agent/a2a/stores.py``)
-monkey-patches the ``a2a.server.tasks`` module namespace before
-``get_fast_api_app`` is called so that DatabaseTaskStore and
-DatabasePushNotificationConfigStore are used when DATABASE_URL is set.
+``get_fast_api_app`` now accepts ``a2a_task_store`` and ``a2a_push_config_store``
+parameters (added via ``scripts/patch_adk.py``; follows ADK PR #3839).
+``build_task_store()`` / ``build_push_config_store()`` in ``stores.py`` return
+the right backend based on DATABASE_URL.
 
-Remove the patch once ADK exposes a native parameter.
-Track: https://github.com/google/adk-python/pull/3839
+Cleanup: once google-adk ships these params natively, delete
+``scripts/patch_adk.py`` and remove the patch step from dev setup.
 
 Start the server:
   uv run python main.py
@@ -41,13 +40,8 @@ _PROJECT_ROOT = Path(__file__).parent
 load_dotenv(_PROJECT_ROOT / ".env")
 load_dotenv(_PROJECT_ROOT / ".env.local", override=True)
 
-# Patch A2A task/push-notification stores BEFORE importing get_fast_api_app so
-# that the monkey-patch is in place when ADK's `from a2a.server.tasks import
-# InMemoryTaskStore` executes inside get_fast_api_app at call time.
-from code_agent.a2a.stores import patch_adk_stores  # noqa: E402
-patch_adk_stores()
-
 from google.adk.cli.fast_api import get_fast_api_app  # noqa: E402
+from code_agent.a2a.stores import build_push_config_store, build_task_store  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +71,8 @@ _PORT = int(os.getenv("APP_PORT", "8000"))
 app = get_fast_api_app(
     agents_dir=_AGENTS_DIR,
     session_service_uri=_session_uri(),
+    a2a_task_store=build_task_store(),
+    a2a_push_config_store=build_push_config_store(),
     web=True,          # serve ADK dev UI at /dev-ui/
     a2a=True,          # enable A2A protocol at /a2a/{agent_name}/
     host=_HOST,
