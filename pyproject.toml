@@ -65,3 +65,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["code_agent"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["evals"]
