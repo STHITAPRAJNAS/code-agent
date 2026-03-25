@@ -1,0 +1,15 @@
+services:
+  code-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - chroma_data:/data/chroma_db
+      - workspace_data:/tmp/code_agent_workspaces
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  workspace_data:
