@@ -1,0 +1,8 @@
+version: 2
+
+# The evals/ directory contains deliberately crafted fake credential strings
+# used to test the secret-redaction guardrail (Layer 2b).  These are not real
+# secrets — they are mock inputs that must look like secrets so the regex
+# patterns fire during testing.
+ignore-paths:
+  - evals/
