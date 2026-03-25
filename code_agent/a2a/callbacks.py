@@ -39,9 +39,10 @@ if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
 
 from code_agent.guardrails import (
-    injection_guard_before_model,   # Layer 2a
-    secret_redaction_after_model,   # Layer 2b
-    search_payload_guard_before_tool,  # Layer 2c
+    injection_guard_before_model,       # Layer 2a
+    secret_redaction_after_model,       # Layer 2b
+    tool_payload_guard_before_tool,     # Layer 2c
+    secret_redaction_after_tool,        # Layer 2d
 )
 
 logger = logging.getLogger(__name__)
@@ -206,10 +207,10 @@ async def before_tool_callback(
     """
     tool_name: str = getattr(tool, "name", str(tool))
 
-    # Layer 2c: block google_search calls with dangerous payloads.
-    search_block = search_payload_guard_before_tool(tool, args, tool_context)
-    if search_block is not None:
-        return search_block
+    # Layer 2c: block any tool call with dangerous payload in its string args.
+    payload_block = tool_payload_guard_before_tool(tool, args, tool_context)
+    if payload_block is not None:
+        return payload_block
 
     if tool_name in ("run_command", "run_script"):
         cmd: str = args.get("command", "") or args.get("script", "")
@@ -241,8 +242,8 @@ async def after_tool_callback(
     args: dict[str, Any],
     tool_context: "ToolContext",
     tool_response: dict[str, Any],
-) -> None:
-    """Append an entry to the per-invocation audit trail in session state."""
+) -> "Optional[dict[str, Any]]":
+    """Audit trail + Layer 2d: redact secrets from tool output before the LLM sees it."""
     tool_name: str = getattr(tool, "name", str(tool))
     audit: list[dict] = tool_context.state.setdefault("tool_audit", [])
     audit.append(
@@ -253,7 +254,8 @@ async def after_tool_callback(
         }
     )
     logger.debug("[tool:%s] completed — response len=%d", tool_name, len(str(tool_response)))
-    return None
+    # Layer 2d: redact any credentials that appeared in tool output.
+    return secret_redaction_after_tool(tool, args, tool_context, tool_response)
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
-"""ADK evaluation tests for all 5 guardrail layers.
+"""ADK evaluation tests for all guardrail layers.
 
 Layers tested:
   2a — injection_guard_before_model      (prompt injection blocking)
-  2b — secret_redaction_after_model      (API key / credential redaction)
-  2c — search_payload_guard_before_tool  (dangerous google_search payloads)
+  2b — secret_redaction_after_model      (API key / credential redaction in model output)
+  2c — tool_payload_guard_before_tool    (dangerous payloads in any tool argument)
+  2d — secret_redaction_after_tool       (API key / credential redaction in tool output)
   4  — before_model_callback call limit  (max LLM calls per invocation)
   5  — system instruction rules          (non-negotiable constraints in _INSTRUCTION)
 
@@ -18,11 +19,14 @@ import pytest
 
 from code_agent.guardrails import (
     _INJECTION_PHRASES,
-    _BLOCKED_SEARCH_PATTERNS,
+    _BLOCKED_TOOL_PATTERNS,
+    _BLOCKED_SEARCH_PATTERNS,   # alias — same list
     _REDACTION_PLACEHOLDER,
     injection_guard_before_model,
     secret_redaction_after_model,
-    search_payload_guard_before_tool,
+    tool_payload_guard_before_tool,
+    search_payload_guard_before_tool,   # backward-compat alias
+    secret_redaction_after_tool,
 )
 
 
@@ -160,63 +164,129 @@ class TestLayer2bSecretRedaction:
 
 
 # ===========================================================================
-# Layer 2c — Search payload guard (before_tool_callback)
+# Layer 2c — Tool payload guard (before_tool_callback) — generalised
 # ===========================================================================
 
-class TestLayer2cSearchPayloadGuard:
-    """search_payload_guard_before_tool blocks dangerous google_search queries."""
+class TestLayer2cToolPayloadGuard:
+    """tool_payload_guard_before_tool blocks dangerous payloads in any tool's string args."""
 
-    @pytest.mark.parametrize("pattern", _BLOCKED_SEARCH_PATTERNS)
-    def test_blocks_each_pattern_in_search(self, pattern, make_tool, make_tool_context):
+    @pytest.mark.parametrize("pattern", _BLOCKED_TOOL_PATTERNS)
+    def test_blocks_each_pattern_in_google_search(self, pattern, make_tool, make_tool_context):
         tool = make_tool("google_search")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": f"site:example.com {pattern} test"}, ctx)
+        result = tool_payload_guard_before_tool(tool, {"query": f"site:example.com {pattern} test"}, ctx)
         assert result is not None, f"Expected block for pattern: {pattern!r}"
         assert "error" in result
 
-    def test_blocks_sql_injection(self, make_tool, make_tool_context):
-        tool = make_tool("google_search")
+    @pytest.mark.parametrize("pattern", _BLOCKED_TOOL_PATTERNS)
+    def test_blocks_each_pattern_in_any_tool(self, pattern, make_tool, make_tool_context):
+        """Guard applies to all tools, not just google_search."""
+        tool = make_tool("write_file")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": "drop table users; --"}, ctx)
+        result = tool_payload_guard_before_tool(tool, {"content": f"example {pattern} injection"}, ctx)
+        assert result is not None, f"Expected block for pattern: {pattern!r} in write_file"
+
+    def test_blocks_sql_injection_in_api_call(self, make_tool, make_tool_context):
+        tool = make_tool("call_api")
+        ctx = make_tool_context()
+        result = tool_payload_guard_before_tool(tool, {"body": "drop table users; --"}, ctx)
         assert result is not None
         assert "Blocked" in result["error"]
-
-    def test_blocks_eval_payload(self, make_tool, make_tool_context):
-        tool = make_tool("google_search")
-        ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": "eval(compile('import os','s','exec'))"}, ctx)
-        assert result is not None
 
     def test_allows_normal_search_query(self, make_tool, make_tool_context):
         tool = make_tool("google_search")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": "python asyncio best practices 2024"}, ctx)
+        result = tool_payload_guard_before_tool(tool, {"query": "python asyncio best practices 2024"}, ctx)
         assert result is None
 
-    def test_does_not_block_other_tools(self, make_tool, make_tool_context):
-        """A non-google_search tool with a dangerous-looking arg must NOT be blocked."""
-        tool = make_tool("read_file")
+    def test_allows_safe_file_write(self, make_tool, make_tool_context):
+        tool = make_tool("write_file")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"path": "drop table config.json"}, ctx)
+        result = tool_payload_guard_before_tool(tool, {"path": "/tmp/out.txt", "content": "hello world"}, ctx)
         assert result is None
 
-    def test_empty_query_passes(self, make_tool, make_tool_context):
+    def test_skips_non_string_args(self, make_tool, make_tool_context):
+        """Non-string arguments (ints, lists) must not cause errors."""
+        tool = make_tool("some_tool")
+        ctx = make_tool_context()
+        result = tool_payload_guard_before_tool(tool, {"count": 42, "items": ["a", "b"]}, ctx)
+        assert result is None
+
+    def test_empty_args_passes(self, make_tool, make_tool_context):
         tool = make_tool("google_search")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {}, ctx)
-        assert result is None
-
-    def test_missing_query_key_passes(self, make_tool, make_tool_context):
-        tool = make_tool("google_search")
-        ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": None}, ctx)
+        result = tool_payload_guard_before_tool(tool, {}, ctx)
         assert result is None
 
     def test_case_insensitive_pattern_match(self, make_tool, make_tool_context):
+        tool = make_tool("run_query")
+        ctx = make_tool_context()
+        result = tool_payload_guard_before_tool(tool, {"sql": "DROP TABLE accounts"}, ctx)
+        assert result is not None
+
+    def test_backward_compat_alias(self, make_tool, make_tool_context):
+        """search_payload_guard_before_tool alias must behave identically."""
         tool = make_tool("google_search")
         ctx = make_tool_context()
-        result = search_payload_guard_before_tool(tool, {"query": "DROP TABLE accounts"}, ctx)
+        result = search_payload_guard_before_tool(tool, {"query": "drop table users"}, ctx)
         assert result is not None
+
+
+# ===========================================================================
+# Layer 2d — Tool output secret redaction (after_tool_callback)
+# ===========================================================================
+
+class TestLayer2dToolOutputRedaction:
+    """secret_redaction_after_tool scrubs credentials from tool responses."""
+
+    def test_redacts_api_key_in_flat_response(self, make_tool, make_tool_context):
+        tool = make_tool("fetch_config")
+        ctx = make_tool_context()
+        response = {"config": "api_key=sk-abc123def456ghi789jkl"}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is not None
+        assert "sk-abc123def456ghi789jkl" not in str(result)
+        assert _REDACTION_PLACEHOLDER in str(result)
+
+    def test_redacts_secret_in_nested_dict(self, make_tool, make_tool_context):
+        tool = make_tool("read_file")
+        ctx = make_tool_context()
+        response = {"data": {"env": {"token": "token=Bearer_abc123xyz"}}}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is not None
+        assert "Bearer_abc123xyz" not in str(result)
+
+    def test_redacts_secret_in_list_value(self, make_tool, make_tool_context):
+        tool = make_tool("list_secrets")
+        ctx = make_tool_context()
+        response = {"lines": ["normal line", "password=hunter2abc"]}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is not None
+        assert "hunter2abc" not in str(result)
+
+    def test_clean_response_returns_none(self, make_tool, make_tool_context):
+        tool = make_tool("read_file")
+        ctx = make_tool_context()
+        response = {"content": "def hello(): return 'world'"}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is None
+
+    def test_redacted_response_preserves_structure(self, make_tool, make_tool_context):
+        tool = make_tool("fetch_config")
+        ctx = make_tool_context()
+        response = {"status": "ok", "key": "api_key=should-be-redacted"}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is not None
+        assert isinstance(result, dict)
+        assert result["status"] == "ok"
+        assert _REDACTION_PLACEHOLDER in result["key"]
+
+    def test_non_string_values_unchanged(self, make_tool, make_tool_context):
+        tool = make_tool("get_stats")
+        ctx = make_tool_context()
+        response = {"count": 42, "ratio": 0.95, "active": True}
+        result = secret_redaction_after_tool(tool, {}, ctx, response)
+        assert result is None  # nothing to redact
 
 
 # ===========================================================================
