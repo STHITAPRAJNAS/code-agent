@@ -4,11 +4,12 @@ Five layers of protection applied at different points in the ADK execution pipel
 
   Layer 2a — before_model_callback  : injection_guard_before_model
   Layer 2b — after_model_callback   : secret_redaction_after_model
-  Layer 2c — before_tool_callback   : search_payload_guard_before_tool
+  Layer 2c — before_tool_callback   : tool_payload_guard_before_tool
+  Layer 2d — after_tool_callback    : secret_redaction_after_tool
 
 Layers 1, 3, 4, and 5 are configured in agent.py / callbacks.py directly.
 
-All three functions in this module are synchronous pure-logic helpers.
+All functions in this module are synchronous pure-logic helpers.
 They have no project-internal imports and no I/O, which makes them easy
 to unit-test without a live ADK runtime.
 """
@@ -61,10 +62,10 @@ _SECRET_PATTERNS: list[re.Pattern] = [
 _REDACTION_PLACEHOLDER = "[REDACTED]"
 
 # ---------------------------------------------------------------------------
-# Layer 2c — dangerous search query patterns
+# Layer 2c — dangerous tool argument patterns (applied to all tool string args)
 # ---------------------------------------------------------------------------
 
-_BLOCKED_SEARCH_PATTERNS: list[str] = [
+_BLOCKED_TOOL_PATTERNS: list[str] = [
     "drop table",
     "drop database",
     "exec(",
@@ -79,6 +80,9 @@ _BLOCKED_SEARCH_PATTERNS: list[str] = [
     "curl http",
     "base64 -d",
 ]
+
+# Kept as an alias so existing test imports don't break.
+_BLOCKED_SEARCH_PATTERNS = _BLOCKED_TOOL_PATTERNS
 
 
 # ---------------------------------------------------------------------------
@@ -189,36 +193,101 @@ def secret_redaction_after_model(
 
 
 # ---------------------------------------------------------------------------
-# Layer 2c: search payload guard — before_tool_callback
+# Layer 2c: tool payload guard — before_tool_callback
 # ---------------------------------------------------------------------------
 
-def search_payload_guard_before_tool(
+def tool_payload_guard_before_tool(
     tool: "BaseTool",
     args: dict[str, Any],
     tool_context: "ToolContext",
 ) -> Optional[dict[str, Any]]:
-    """Block google_search calls whose query contains dangerous payloads.
+    """Block any tool call whose string arguments contain dangerous payloads.
 
-    Only inspects the 'google_search' tool (exact name match).
+    Scans every string value in *args* against _BLOCKED_TOOL_PATTERNS.
     Returns an error dict to cancel the tool call, or None to allow it.
+    This generalised guard covers search tools, file tools, API callers, etc.
     """
     tool_name: str = getattr(tool, "name", "")
-    if tool_name != "google_search":
-        return None
-
-    query: str = (args.get("query") or "").lower()
-    for pattern in _BLOCKED_SEARCH_PATTERNS:
-        if pattern in query:
-            logger.warning(
-                "[guardrail-2c:%s] blocked dangerous search payload — pattern=%r query=%r",
-                getattr(tool_context, "agent_name", "?"),
-                pattern,
-                query[:120],
-            )
-            return {
-                "error": (
-                    f"Blocked: search query contains a dangerous pattern '{pattern}'. "
-                    "If this was intentional, please rephrase the query."
+    for arg_key, arg_val in args.items():
+        if not isinstance(arg_val, str):
+            continue
+        lower_val = arg_val.lower()
+        for pattern in _BLOCKED_TOOL_PATTERNS:
+            if pattern in lower_val:
+                logger.warning(
+                    "[guardrail-2c:%s] blocked dangerous payload in tool=%r arg=%r — pattern=%r",
+                    getattr(tool_context, "agent_name", "?"),
+                    tool_name,
+                    arg_key,
+                    pattern,
                 )
-            }
+                return {
+                    "error": (
+                        f"Blocked: argument '{arg_key}' in tool '{tool_name}' contains "
+                        f"a dangerous pattern '{pattern}'. "
+                        "If this was intentional, please confirm explicitly."
+                    )
+                }
+    return None
+
+
+# Backward-compatible alias used by existing tests and callbacks.
+search_payload_guard_before_tool = tool_payload_guard_before_tool
+
+
+# ---------------------------------------------------------------------------
+# Layer 2d: tool output secret guard — after_tool_callback
+# ---------------------------------------------------------------------------
+
+def secret_redaction_after_tool(
+    tool: "BaseTool",
+    args: dict[str, Any],
+    tool_context: "ToolContext",
+    tool_response: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Redact credential-like patterns from tool output before the LLM sees it.
+
+    Walks all string values in *tool_response* recursively and applies the
+    same _SECRET_PATTERNS regexes used by the after_model_callback guard.
+    Returns a sanitised copy of the response dict if any redaction occurred,
+    or None to let the original response through unchanged.
+    """
+    tool_name: str = getattr(tool, "name", "")
+
+    def _redact_value(val: Any) -> tuple[Any, bool]:
+        """Return (redacted_val, was_changed)."""
+        if isinstance(val, str):
+            cleaned = val
+            for pattern in _SECRET_PATTERNS:
+                cleaned = pattern.sub(_REDACTION_PLACEHOLDER, cleaned)
+            return cleaned, cleaned != val
+        if isinstance(val, dict):
+            new_dict: dict = {}
+            changed = False
+            for k, v in val.items():
+                new_v, c = _redact_value(v)
+                new_dict[k] = new_v
+                changed = changed or c
+            return new_dict, changed
+        if isinstance(val, list):
+            new_list: list = []
+            changed = False
+            for item in val:
+                new_item, c = _redact_value(item)
+                new_list.append(new_item)
+                changed = changed or c
+            return new_list, changed
+        return val, False
+
+    try:
+        sanitised, any_redacted = _redact_value(tool_response)
+        if any_redacted:
+            logger.warning(
+                "[guardrail-2d:%s] secrets redacted from tool=%r output",
+                getattr(tool_context, "agent_name", "?"),
+                tool_name,
+            )
+            return sanitised
+    except Exception as exc:
+        logger.debug("[guardrail-2d] tool output redaction skipped: %s", exc)
     return None
