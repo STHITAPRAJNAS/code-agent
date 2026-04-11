@@ -50,6 +50,9 @@ dependencies = [
     "psycopg[binary,async]>=3.2.0",
     "sqlalchemy[asyncio]>=2.0.0",
     "a2a-sdk>=0.3.25",
+    # Memory tools + logging
+    "aiofiles>=24.1.0",
+    "structlog>=24.0.0",
 ]
 
 [project.scripts]

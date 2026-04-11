@@ -26,8 +26,12 @@ Returning a typed value short-circuits (skips) that stage.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
+
+import structlog
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids hard failures if ADK internals
@@ -39,6 +43,11 @@ if TYPE_CHECKING:
     from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+_slog: structlog.BoundLogger = structlog.get_logger(__name__)
+
+# Per-session ContextManager registry keyed by session_id
+# (ContextManager is lightweight — one per session, lives for session lifetime)
+_context_managers: dict[str, Any] = {}
 
 # ---------------------------------------------------------------------------
 # Patterns blocked unconditionally in run_command / run_script
@@ -79,14 +88,71 @@ _MAX_LLM_CALLS = 40  # hard guard against infinite loops
 # ---------------------------------------------------------------------------
 
 async def before_agent_callback(callback_context: "CallbackContext") -> None:
-    """Record invocation start time and seed instruction template variables."""
+    """Record invocation start time, seed template vars, and initialise session services.
+
+    On session start this callback:
+      1. Seeds instruction template placeholders.
+      2. Loads AGENT.md + MEMORY.md pointer index into session state.
+      3. Fetches codebase snapshot (git branch, commits, index stats).
+      4. Resets the ContextManager circuit breaker for this session.
+    """
     callback_context.state["invocation_start_ms"] = int(time.time() * 1000)
-    callback_context.state[_TOKEN_CALL_KEY] = 0  # reset call counter
-    # Seed keys used in the instruction template so ADK's inject_session_state
-    # doesn't raise KeyError when they are absent from state.
+    callback_context.state[_TOKEN_CALL_KEY] = 0  # reset LLM call counter
+
+    # Seed keys used in the instruction template
     callback_context.state.setdefault("custom_instructions", "")
     callback_context.state.setdefault("active_repo", "")
     callback_context.state.setdefault("active_workspace", "")
+
+    session_id: str = getattr(callback_context, "session_id", "") or ""
+
+    # ── Reset / create ContextManager circuit breaker ─────────────────────────
+    from code_agent.services.context_manager import ContextManager
+    ctx_mgr = _context_managers.get(session_id)
+    if ctx_mgr is None:
+        ctx_mgr = ContextManager(session_id=session_id)
+        _context_managers[session_id] = ctx_mgr
+    else:
+        ctx_mgr.reset_circuit_breaker()
+
+    # ── Load AGENT.md + MEMORY.md into session state (on first invocation) ────
+    if not callback_context.state.get("_memory_loaded"):
+        try:
+            from code_agent.tools.memory_tools import read_agent_config
+
+            class _FakeCtx:
+                state = callback_context.state
+
+            mem_data = await read_agent_config(_FakeCtx())  # type: ignore[arg-type]
+            callback_context.state["agent_config"] = mem_data.get("agent_config", "")
+            callback_context.state["memory_index"] = mem_data.get("memory_index", [])
+            callback_context.state["_memory_loaded"] = True
+            _slog.info(
+                "session.memory_loaded",
+                pointer_count=len(mem_data.get("memory_index", [])),
+                session_id=session_id,
+            )
+        except Exception as exc:
+            _slog.warning("session.memory_load_failed", error=str(exc), session_id=session_id)
+
+    # ── Fetch lightweight codebase snapshot ───────────────────────────────────
+    try:
+        from code_agent.tools.search_tools import get_current_codebase_state
+
+        class _FakeCtx2:  # type: ignore[no-redef]
+            state = callback_context.state
+
+        snapshot = await get_current_codebase_state(_FakeCtx2())  # type: ignore[arg-type]
+        callback_context.state["codebase_snapshot"] = snapshot
+        _slog.debug(
+            "session.codebase_snapshot",
+            branch=snapshot.get("git_branch", ""),
+            chunks=snapshot.get("total_chunks", 0),
+            session_id=session_id,
+        )
+    except Exception as exc:
+        _slog.debug("session.codebase_snapshot_failed", error=str(exc))
+
     logger.info(
         "[agent:%s] invocation=%s started",
         callback_context.agent_name,
@@ -100,7 +166,7 @@ async def before_agent_callback(callback_context: "CallbackContext") -> None:
 # ---------------------------------------------------------------------------
 
 async def after_agent_callback(callback_context: "CallbackContext") -> None:
-    """Log elapsed time for the invocation."""
+    """Log elapsed time and trigger AutoDream as a background task on session end."""
     start = callback_context.state.get("invocation_start_ms", 0)
     elapsed = int(time.time() * 1000) - start
     calls = callback_context.state.get(_TOKEN_CALL_KEY, 0)
@@ -111,6 +177,25 @@ async def after_agent_callback(callback_context: "CallbackContext") -> None:
         elapsed,
         calls,
     )
+
+    # ── Increment session counter + launch AutoDream background consolidation ──
+    workspace = (
+        callback_context.state.get("active_workspace")
+        or os.environ.get("WORKSPACE_ROOT")
+        or os.environ.get("WORKSPACE_DIR", "/tmp/code_agent_workspaces")
+    )
+    try:
+        from code_agent.services.auto_dream import increment_session_and_dream
+        session_count = await increment_session_and_dream(Path(workspace))
+        _slog.info(
+            "session.end",
+            session_count=session_count,
+            elapsed_ms=elapsed,
+            workspace=str(workspace),
+        )
+    except Exception as exc:
+        _slog.warning("session.end.auto_dream_error", error=str(exc))
+
     return None
 
 
@@ -133,10 +218,40 @@ async def before_model_callback(
     from google.adk.models.llm_response import LlmResponse
     from google.genai import types as genai_types
 
-    # ── 3a. Inject context into system instruction ────────────────────────────
+    # ── 3a. Check context budget and compress if needed ───────────────────────
+    session_id = getattr(callback_context, "session_id", "") or ""
+    ctx_mgr = _context_managers.get(session_id)
+    if ctx_mgr is not None:
+        try:
+            contents = getattr(llm_request, "contents", None) or []
+            messages = [
+                {"role": getattr(c, "role", ""), "content": str(getattr(c, "parts", "") or "")}
+                for c in contents
+            ]
+            active_files: list[str] = callback_context.state.get("active_files", [])
+            current_plan: str | None = callback_context.state.get("current_plan")
+            # Estimate max_tokens from model config (default 128k for Gemini)
+            max_tokens: int = callback_context.state.get("max_context_tokens", 128_000)
+            compressed_msgs, was_compressed = await ctx_mgr.check_and_compress(
+                messages=messages,
+                token_count=0,  # let ContextManager estimate
+                max_tokens=max_tokens,
+                active_files=active_files,
+                current_plan=current_plan,
+            )
+            if was_compressed:
+                _slog.info(
+                    "callback.context_compressed",
+                    session_id=session_id,
+                    invocation_id=callback_context.invocation_id,
+                )
+        except Exception as exc:
+            _slog.warning("callback.context_check_error", error=str(exc))
+
+    # ── 3b. Inject context into system instruction ────────────────────────────
     _inject_context_into_system_instruction(callback_context, llm_request)
 
-    # ── 3b. Prompt-injection guard ────────────────────────────────────────────
+    # ── 3c. Prompt-injection guard ────────────────────────────────────────────
     injection_match = _check_prompt_injection(llm_request)
     if injection_match:
         logger.warning(
@@ -156,7 +271,7 @@ async def before_model_callback(
         )
         return blocked
 
-    # ── 3c. LLM call-count guard ──────────────────────────────────────────────
+    # ── 3d. LLM call-count guard ──────────────────────────────────────────────
     call_count = callback_context.state.get(_TOKEN_CALL_KEY, 0) + 1
     callback_context.state[_TOKEN_CALL_KEY] = call_count
     if call_count > _MAX_LLM_CALLS:

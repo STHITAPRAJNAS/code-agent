@@ -1,13 +1,17 @@
-"""Search tools — semantic, lexical, hybrid search, and repository indexing.
+"""Search tools — semantic, lexical, hybrid search, repository indexing,
+and live codebase verification (skeptical memory).
 
 ADK tool functions wrapping the code_agent search and indexer layers.
-All functions return plain strings consumed directly by LLM agents.
+Sync functions return strings; async functions (verify_symbol_exists,
+get_current_codebase_state) return dicts.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import subprocess
+from pathlib import Path
+from typing import Any, Optional
 
 from google.adk.tools import ToolContext
 
@@ -553,3 +557,216 @@ def index_local_repository(
         if len(result.errors) > 10:
             lines.append(f"    ... and {len(result.errors) - 10} more")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Codebase verification (skeptical memory)
+# ---------------------------------------------------------------------------
+
+
+async def verify_symbol_exists(
+    symbol_name: str,
+    tool_context: Optional["ToolContext"] = None,
+) -> dict[str, Any]:
+    """Verify a function/class/variable actually exists in the current codebase.
+
+    Implements the "treat memory as a hint" principle:
+      1. Check MEMORY.md for a pointer to the symbol's location (cheap).
+      2. ALWAYS verify via live hybrid search regardless of what memory says.
+      3. If the memory pointer is stale (symbol not found at remembered location),
+         auto-invalidate the memory entry and return the corrected location
+         if the symbol is found elsewhere.
+
+    This prevents the agent from acting on stale memory of refactored code.
+
+    Args:
+        symbol_name: Function, class, or variable name to verify.
+        tool_context: ADK ToolContext for session state + workspace resolution.
+
+    Returns a dict with keys:
+        exists          — bool
+        file            — file path where symbol was found, or ""
+        line            — line number (1-based), or 0 if not found
+        memory_was_stale — bool: True if memory pointed to a wrong location
+    """
+    from google.adk.tools import ToolContext as _TC  # noqa: F401
+
+    workspace_root: str = ""
+    if tool_context is not None:
+        workspace_root = (
+            tool_context.state.get("active_workspace", "")
+            or tool_context.state.get("active_repo", "")
+            or "."
+        )
+
+    # ── Step 1: probe memory for a known location ─────────────────────────────
+    memory_file: str = ""
+    memory_line: int = 0
+    try:
+        from code_agent.tools.memory_tools import recall_topic
+        mem_result = await recall_topic(f"symbol:{symbol_name}", tool_context)
+        if mem_result.get("found"):
+            content = mem_result.get("content", "")
+            # Parse "file: path/to/file.py  line: 42" from stored content
+            for ln in content.splitlines():
+                if ln.startswith("file:"):
+                    memory_file = ln.split(":", 1)[1].strip()
+                if ln.startswith("line:"):
+                    try:
+                        memory_line = int(ln.split(":", 1)[1].strip())
+                    except ValueError:
+                        pass
+    except Exception:
+        pass  # memory unavailable — proceed directly to live search
+
+    # ── Step 2: always verify via live lexical search ─────────────────────────
+    search_root = workspace_root or "."
+    found_file = ""
+    found_line = 0
+
+    try:
+        from code_agent.search.lexical_search import LexicalSearcher
+
+        searcher = LexicalSearcher()
+        matches = searcher.find_symbol_references(
+            symbol=symbol_name,
+            path=search_root,
+            language=None,
+        )
+        # Filter to definition sites — prefer lines with 'def', 'class', or '='
+        definition_matches = [
+            m for m in matches
+            if any(
+                kw in m.line_content
+                for kw in ("def ", "class ", " = ", "function ", "const ", "var ", "let ")
+            )
+        ]
+        primary = definition_matches[0] if definition_matches else (matches[0] if matches else None)
+        if primary:
+            found_file = primary.file_path
+            found_line = primary.line_number
+    except Exception as exc:
+        logger.debug("verify_symbol_exists.search_error", symbol=symbol_name, error=str(exc))
+
+    # ── Step 3: detect staleness and auto-invalidate ──────────────────────────
+    memory_was_stale = False
+    if memory_file and found_file:
+        # Stale if memory pointed to a different file than live search found
+        memory_was_stale = Path(memory_file).resolve() != Path(found_file).resolve()
+        if memory_was_stale:
+            logger.warning(
+                "verify_symbol.memory_stale",
+                symbol=symbol_name,
+                memory_file=memory_file,
+                live_file=found_file,
+            )
+            try:
+                from code_agent.tools.memory_tools import forget
+                await forget(f"symbol:{symbol_name}", tool_context)
+            except Exception:
+                pass
+
+    exists = bool(found_file)
+    logger.info(
+        "verify_symbol_exists",
+        symbol=symbol_name,
+        exists=exists,
+        file=found_file,
+        line=found_line,
+        memory_was_stale=memory_was_stale,
+    )
+    return {
+        "exists": exists,
+        "file": found_file,
+        "line": found_line,
+        "memory_was_stale": memory_was_stale,
+    }
+
+
+async def get_current_codebase_state(
+    tool_context: Optional["ToolContext"] = None,
+) -> dict[str, Any]:
+    """Return a lightweight snapshot of the current workspace for context injection.
+
+    Reads only git metadata and index statistics — never reads file contents.
+    Use the returned dict to populate the dynamic section of the system prompt
+    via DynamicPromptContext.workspace_info.
+
+    Args:
+        tool_context: ADK ToolContext for workspace resolution.
+
+    Returns a dict with keys:
+        git_branch       — current branch name, or "" if not a git repo
+        recent_commits   — list of dicts {sha, author, subject} (last 5)
+        modified_files   — list of unstaged/staged changed file paths
+        total_chunks     — total indexed code chunks (0 if index unavailable)
+        index_freshness  — "fresh" | "stale" | "unknown"
+        workspace        — resolved workspace root path (string)
+    """
+    import os
+
+    workspace: str = "."
+    if tool_context is not None:
+        workspace = (
+            tool_context.state.get("active_workspace", "")
+            or tool_context.state.get("active_repo", "")
+            or "."
+        )
+
+    root = Path(workspace).expanduser().resolve()
+
+    # ── Git metadata ──────────────────────────────────────────────────────────
+    git_branch = ""
+    recent_commits: list[dict[str, str]] = []
+    modified_files: list[str] = []
+
+    def _run_git(args: list[str]) -> str:
+        try:
+            result = subprocess.run(
+                ["git"] + args,
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    git_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+
+    log_out = _run_git(["log", "--oneline", "--pretty=%H|%an|%s", "-5"])
+    for entry in log_out.splitlines():
+        parts = entry.split("|", 2)
+        if len(parts) == 3:
+            recent_commits.append({"sha": parts[0][:8], "author": parts[1], "subject": parts[2]})
+
+    status_out = _run_git(["status", "--porcelain"])
+    for line in status_out.splitlines():
+        if len(line) >= 3:
+            modified_files.append(line[3:].strip())
+
+    # ── Index statistics ──────────────────────────────────────────────────────
+    total_chunks = 0
+    index_freshness = "unknown"
+    try:
+        from code_agent.config import get_settings
+        cfg = get_settings()
+        if cfg.RAG_BACKEND == "llamaindex":
+            from code_agent.storage.rag_store import RAGStore
+            store = RAGStore(mode=cfg.DEPLOYMENT_MODE, collection_name=cfg.PGVECTOR_TABLE)
+            total_chunks = store.count() if hasattr(store, "count") else 0
+            index_freshness = "fresh" if total_chunks > 0 else "stale"
+    except Exception:
+        pass
+
+    state = {
+        "git_branch": git_branch,
+        "recent_commits": recent_commits,
+        "modified_files": modified_files,
+        "total_chunks": total_chunks,
+        "index_freshness": index_freshness,
+        "workspace": str(root),
+    }
+    logger.debug("get_current_codebase_state", **{k: v for k, v in state.items() if k != "recent_commits"})
+    return state
