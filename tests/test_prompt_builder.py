@@ -198,3 +198,84 @@ class TestSummariseAgentConfig:
         from code_agent.services.prompt_builder import summarise_agent_config
 
         assert summarise_agent_config("") == ""
+
+
+class TestExtractL0ForStaticSection:
+    def test_returns_first_heading_and_content(self) -> None:
+        from code_agent.services.prompt_builder import extract_l0_for_static_section
+
+        config = "# MyRepo\nPython 3.12, FastAPI.\n\nLots more detail here..." + "x" * 300
+        result = extract_l0_for_static_section(config)
+        assert "MyRepo" in result
+        assert len(result) <= 200
+
+    def test_empty_returns_empty(self) -> None:
+        from code_agent.services.prompt_builder import extract_l0_for_static_section
+
+        assert extract_l0_for_static_section("") == ""
+
+    def test_short_config_returned_in_full(self) -> None:
+        from code_agent.services.prompt_builder import extract_l0_for_static_section
+
+        short = "# MyRepo\nPython 3.12."
+        assert extract_l0_for_static_section(short) == short
+
+    def test_custom_max_chars_respected(self) -> None:
+        from code_agent.services.prompt_builder import extract_l0_for_static_section
+
+        config = "# Title\n" + "a" * 500
+        result = extract_l0_for_static_section(config, max_chars=50)
+        assert len(result) <= 50
+
+
+class TestL0InStaticSection:
+    def test_l0_project_summary_precedes_agent_identity(self) -> None:
+        """L0 must be the very first content in the static section."""
+        from code_agent.services.prompt_builder import (
+            build_system_prompt,
+            StaticPromptConfig,
+            DynamicPromptContext,
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        )
+
+        static = StaticPromptConfig(
+            l0_project_summary="# MyRepo — Python 3.12",
+            agent_identity="I am Alex, a staff engineer.",
+        )
+        prompt = build_system_prompt(static, DynamicPromptContext())
+
+        l0_pos = prompt.index("MyRepo")
+        identity_pos = prompt.index("Alex")
+        boundary_pos = prompt.index(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)
+
+        assert l0_pos < identity_pos < boundary_pos
+
+    def test_l0_in_static_section_identical_across_sessions(self) -> None:
+        """Same l0_project_summary → byte-identical static prefix regardless of dynamic content."""
+        from code_agent.services.prompt_builder import (
+            build_system_prompt,
+            StaticPromptConfig,
+            DynamicPromptContext,
+            SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        )
+
+        static = StaticPromptConfig(l0_project_summary="# MyRepo — Python 3.12")
+        p1 = build_system_prompt(static, DynamicPromptContext(workspace_info="user-alice"))
+        p2 = build_system_prompt(static, DynamicPromptContext(workspace_info="user-bob"))
+
+        prefix1 = p1.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[0]
+        prefix2 = p2.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY)[0]
+        assert prefix1 == prefix2  # cache prefix identical for both users
+
+    def test_empty_l0_does_not_add_blank_line(self) -> None:
+        from code_agent.services.prompt_builder import (
+            build_system_prompt,
+            StaticPromptConfig,
+            DynamicPromptContext,
+        )
+
+        prompt = build_system_prompt(
+            StaticPromptConfig(l0_project_summary="", agent_identity="Agent"),
+            DynamicPromptContext(),
+        )
+        assert not prompt.startswith("\n")

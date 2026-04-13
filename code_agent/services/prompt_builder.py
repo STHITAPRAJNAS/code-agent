@@ -40,6 +40,10 @@ logger: structlog.BoundLogger = structlog.get_logger(__name__)
 
 SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "──── STABLE BOUNDARY ────"
 
+# L0 target: ~50 tokens, ~200 characters.  Populated from the first heading +
+# paragraph of AGENT.md so it is byte-identical for every user on the same repo.
+_L0_MAX_CHARS: int = 200
+
 # ---------------------------------------------------------------------------
 # Config models
 # ---------------------------------------------------------------------------
@@ -50,8 +54,17 @@ class StaticPromptConfig(BaseModel):
 
     Populate once at startup from static configuration — never from
     per-request or per-session data.
+
+    MemPalace layer mapping
+    -----------------------
+    l0_project_summary  → L0 (~50 tok): project name + tech stack extracted
+                          from AGENT.md.  Placed FIRST in the static section so
+                          Gemini's prompt cache can lock onto it as a stable
+                          prefix shared by every user working on the same repo.
+    agent_identity      → Agent persona / capabilities (also static, also cached).
     """
 
+    l0_project_summary: str = ""        # L0: first ~50 tokens of repo AGENT.md
     agent_identity: str = ""
     tool_definitions_summary: str = ""
     coding_conventions: str = ""
@@ -95,6 +108,11 @@ def build_system_prompt(
         The fully assembled system prompt string.
     """
     static_parts: list[str] = []
+
+    # L0 goes first — it must be byte-identical for every session on the same repo
+    # so it forms the longest stable cache prefix for Gemini.
+    if static_config.l0_project_summary:
+        static_parts.append(static_config.l0_project_summary.rstrip())
 
     if static_config.agent_identity:
         static_parts.append(static_config.agent_identity.rstrip())
@@ -184,6 +202,30 @@ def summarise_agent_config(agent_config_text: str, max_chars: int = 1500) -> str
     if len(agent_config_text) <= max_chars:
         return agent_config_text
     return agent_config_text[:max_chars] + "\n\n[...truncated for context efficiency]"
+
+
+def extract_l0_for_static_section(agent_config_text: str, max_chars: int = _L0_MAX_CHARS) -> str:
+    """Extract the L0 project identity slice from AGENT.md.
+
+    Grabs the first heading + following content up to *max_chars* characters.
+    The result is injected into ``StaticPromptConfig.l0_project_summary`` so it
+    ends up BEFORE ``SYSTEM_PROMPT_DYNAMIC_BOUNDARY`` and is byte-identical for
+    every user and every session on the same repository — maximising Gemini cache hits.
+
+    Callers must ensure the content is time-invariant (project name, tech stack,
+    language versions).  Do NOT pass anything that changes per-session here.
+    """
+    if not agent_config_text:
+        return ""
+    # Walk lines until we hit the char budget; always include at least the first line
+    lines: list[str] = []
+    chars = 0
+    for line in agent_config_text.splitlines():
+        if chars > 0 and chars + len(line) + 1 > max_chars:
+            break
+        lines.append(line)
+        chars += len(line) + 1
+    return "\n".join(lines).rstrip()
 
 
 def format_memory_index_for_prompt(memory_index: list[dict[str, str]]) -> str:

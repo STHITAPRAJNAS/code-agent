@@ -104,6 +104,16 @@ async def before_agent_callback(callback_context: "CallbackContext") -> None:
     callback_context.state.setdefault("active_repo", "")
     callback_context.state.setdefault("active_workspace", "")
 
+    # Derive repo_workspace from active_repo if not explicitly provided.
+    # This ensures the shared repo tier is automatically available without
+    # requiring callers to compute the path themselves.
+    if not callback_context.state.get("repo_workspace"):
+        active_repo: str = callback_context.state.get("active_repo", "")
+        if active_repo:
+            from code_agent.tools.memory_tools import _repo_slug
+            base = os.environ.get("REPO_WORKSPACE_BASE", "/data/repos")
+            callback_context.state["repo_workspace"] = f"{base}/{_repo_slug(active_repo)}"
+
     session_id: str = getattr(callback_context, "session_id", "") or ""
 
     # ── Reset / create ContextManager circuit breaker ─────────────────────────
@@ -126,6 +136,9 @@ async def before_agent_callback(callback_context: "CallbackContext") -> None:
             mem_data = await read_agent_config(_FakeCtx())  # type: ignore[arg-type]
             callback_context.state["agent_config"] = mem_data.get("agent_config", "")
             callback_context.state["memory_index"] = mem_data.get("memory_index", [])
+            # L0: project identity for the static prompt section — shared across all
+            # users on the same repo, kept before SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
+            callback_context.state["l0_identity"] = mem_data.get("l0_identity", "")
             callback_context.state["_memory_loaded"] = True
             _slog.info(
                 "session.memory_loaded",
@@ -432,10 +445,24 @@ def _inject_context_into_system_instruction(
     active_workspace = callback_context.state.get("active_workspace") or "Not set"
     custom_instructions = callback_context.state.get("custom_instructions") or ""
 
+    # L0/L1 memory layer placeholders
+    # {l0_project_summary} → static section (before boundary, maximises cache hits)
+    # {l1_memory_index}    → dynamic section (loaded every session, ~120 tokens)
+    from code_agent.services.prompt_builder import (
+        extract_l0_for_static_section,
+        format_memory_index_for_prompt,
+    )
+    raw_l0 = callback_context.state.get("l0_identity") or ""
+    l0_project_summary = extract_l0_for_static_section(raw_l0) if raw_l0 else ""
+    memory_index_list: list[dict] = callback_context.state.get("memory_index") or []
+    l1_memory_index = format_memory_index_for_prompt(memory_index_list)
+
     replacements = {
         "{active_repo}": f"Active repository: {active_repo}",
         "{active_workspace}": f"Active workspace: {active_workspace}",
         "{custom_instructions}": custom_instructions,
+        "{l0_project_summary}": l0_project_summary,
+        "{l1_memory_index}": l1_memory_index,
     }
 
     try:

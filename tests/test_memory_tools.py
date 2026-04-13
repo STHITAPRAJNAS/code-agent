@@ -1,8 +1,9 @@
 """Unit tests for the 3-layer file-based memory system.
 
 Covers: read/write/forget/list operations, atomic writes, pointer index
-parsing, and multi-write idempotency.  No network calls — pure file I/O
-using a temp directory.
+parsing, multi-write idempotency, two-tier workspace routing, scope parameter,
+L0 extraction, and merged read_agent_config.  No network calls — pure file I/O
+using temp directories.
 """
 
 from __future__ import annotations
@@ -32,13 +33,23 @@ def patch_workspace_env(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Helper: build a minimal fake ToolContext
+# Helper: build minimal fake ToolContexts
 # ---------------------------------------------------------------------------
 
 
 class FakeToolContext:
     def __init__(self, workspace: Path) -> None:
         self.state: dict = {"active_workspace": str(workspace)}
+
+
+class FakeTwoTierContext:
+    """Fake context that exposes both user and repo workspace paths."""
+
+    def __init__(self, user_workspace: Path, repo_workspace: Path) -> None:
+        self.state: dict = {
+            "active_workspace": str(user_workspace),
+            "repo_workspace": str(repo_workspace),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -233,3 +244,184 @@ class TestMemoryReadWrite:
 
         topics = await list_memory_topics(tool_context=ctx)
         assert topics["topics"][0]["summary"] == "Auto Heading"
+
+
+# ---------------------------------------------------------------------------
+# Two-tier workspace routing
+# ---------------------------------------------------------------------------
+
+
+class TestTwoTierWorkspace:
+    @pytest.mark.asyncio
+    async def test_repo_scope_writes_to_repo_workspace(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        result = await remember("arch", "# Architecture\nMicroservices.", scope="repo", tool_context=ctx)
+
+        assert result["scope"] == "repo"
+        # File must be in the repo workspace, NOT the user workspace
+        assert repo_ws.name in result["file_path"]
+        assert not (user_ws / ".agent" / "memory" / "arch.md").exists()
+        assert (repo_ws / ".agent" / "memory" / "arch.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_user_scope_writes_to_user_workspace(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        result = await remember("task", "# Current task\nFix auth bug.", scope="user", tool_context=ctx)
+
+        assert result["scope"] == "user"
+        assert user_ws.name in result["file_path"]
+        assert not (repo_ws / ".agent" / "memory" / "task.md").exists()
+
+    @pytest.mark.asyncio
+    async def test_recall_user_shadows_repo_on_same_topic(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember, recall_topic
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        await remember("auth", "repo version of auth", scope="repo", tool_context=ctx)
+        await remember("auth", "user override of auth", scope="user", tool_context=ctx)
+
+        result = await recall_topic("auth", tool_context=ctx)
+        assert result["found"] is True
+        assert result["scope"] == "user"
+        assert "user override" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_recall_falls_back_to_repo_when_not_in_user(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember, recall_topic
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        await remember("db-schema", "# DB Schema\nPostgres tables.", scope="repo", tool_context=ctx)
+
+        result = await recall_topic("db-schema", tool_context=ctx)
+        assert result["found"] is True
+        assert result["scope"] == "repo"
+        assert "Postgres" in result["content"]
+
+    @pytest.mark.asyncio
+    async def test_list_topics_merges_both_tiers(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember, list_memory_topics
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        await remember("arch", "Microservices.", scope="repo", tool_context=ctx)
+        await remember("api-contracts", "REST API.", scope="repo", tool_context=ctx)
+        await remember("current-task", "Fix login bug.", scope="user", tool_context=ctx)
+
+        listing = await list_memory_topics(tool_context=ctx)
+        assert listing["count"] == 3
+        topics_by_name = {t["topic"]: t for t in listing["topics"]}
+        assert topics_by_name["arch"]["scope"] == "repo"
+        assert topics_by_name["current-task"]["scope"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_list_topics_user_shadows_repo_scope(self, tmp_path: Path) -> None:
+        """A topic written to both tiers shows as 'user' in the listing."""
+        from code_agent.tools.memory_tools import remember, list_memory_topics
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        await remember("auth", "repo auth", scope="repo", tool_context=ctx)
+        await remember("auth", "user auth override", scope="user", tool_context=ctx)
+
+        listing = await list_memory_topics(tool_context=ctx)
+        assert listing["count"] == 1
+        assert listing["topics"][0]["scope"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_read_agent_config_merges_both_tiers(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import read_agent_config
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        user_ws.mkdir(parents=True)
+        repo_ws.mkdir(parents=True)
+        (repo_ws / "AGENT.md").write_text("# MyRepo\nPython 3.12, FastAPI.")
+        (user_ws / "AGENT.md").write_text("## User Preferences\nPrefer verbose logging.")
+
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+        result = await read_agent_config(tool_context=ctx)
+
+        # Both configs appear in the merged output
+        assert "MyRepo" in result["agent_config"]
+        assert "User Preferences" in result["agent_config"]
+        # Repo content must come first
+        assert result["agent_config"].index("MyRepo") < result["agent_config"].index("User Preferences")
+
+    @pytest.mark.asyncio
+    async def test_l0_identity_extracted_from_repo_config(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import read_agent_config, L0_CHARS
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        repo_ws.mkdir(parents=True)
+        long_config = "# MyRepo\nPython 3.12, FastAPI.\n" + "extra detail " * 50
+        (repo_ws / "AGENT.md").write_text(long_config)
+
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+        result = await read_agent_config(tool_context=ctx)
+
+        assert "MyRepo" in result["l0_identity"]
+        assert len(result["l0_identity"]) <= L0_CHARS
+
+    @pytest.mark.asyncio
+    async def test_forget_repo_scope_removes_only_repo_entry(self, tmp_path: Path) -> None:
+        from code_agent.tools.memory_tools import remember, forget, list_memory_topics
+
+        user_ws = tmp_path / "user"
+        repo_ws = tmp_path / "repo"
+        ctx = FakeTwoTierContext(user_ws, repo_ws)
+
+        await remember("auth", "repo auth knowledge", scope="repo", tool_context=ctx)
+        await remember("auth", "user auth notes", scope="user", tool_context=ctx)
+
+        await forget("auth", scope="repo", tool_context=ctx)
+
+        listing = await list_memory_topics(tool_context=ctx)
+        # User entry survives; repo entry is gone
+        assert listing["count"] == 1
+        assert listing["topics"][0]["scope"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# _repo_slug
+# ---------------------------------------------------------------------------
+
+
+class TestRepoSlug:
+    def test_github_https_url(self) -> None:
+        from code_agent.tools.memory_tools import _repo_slug
+        assert _repo_slug("https://github.com/acme/my-service.git") == "acme--my-service"
+
+    def test_github_ssh_url(self) -> None:
+        from code_agent.tools.memory_tools import _repo_slug
+        assert _repo_slug("git@github.com:acme/my-service.git") == "acme--my-service"
+
+    def test_local_path(self) -> None:
+        from code_agent.tools.memory_tools import _repo_slug
+        slug = _repo_slug("/home/user/projects/my-service")
+        assert "my" in slug or "service" in slug  # basename extracted
+
+    def test_unknown_format_returns_hash(self) -> None:
+        from code_agent.tools.memory_tools import _repo_slug
+        slug = _repo_slug("???unknown???")
+        assert slug.startswith("repo-")
