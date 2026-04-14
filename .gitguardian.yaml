@@ -4,5 +4,5 @@ version: 2
 # used to test the secret-redaction guardrail (Layer 2b).  These are not real
 # secrets — they are mock inputs that must look like secrets so the regex
 # patterns fire during testing.
-ignore-paths:
-  - evals/
+paths-ignore:
+  - "evals/**"
