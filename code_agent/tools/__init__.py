@@ -74,6 +74,19 @@ from code_agent.tools.search_tools import (
     hybrid_search,
     find_symbol_references,
     index_local_repository,
+    verify_symbol_exists,
+    get_current_codebase_state,
+)
+
+# ---------------------------------------------------------------------------
+# Memory tools
+# ---------------------------------------------------------------------------
+from code_agent.tools.memory_tools import (
+    read_agent_config,
+    recall_topic,
+    remember,
+    forget,
+    list_memory_topics,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,4 +197,13 @@ __all__ = [
     # approval gates
     "request_pr_approval_tool",
     "request_push_approval_tool",
+    # search (verification)
+    "verify_symbol_exists",
+    "get_current_codebase_state",
+    # memory tools
+    "read_agent_config",
+    "recall_topic",
+    "remember",
+    "forget",
+    "list_memory_topics",
 ]
