@@ -140,9 +140,37 @@ async def before_agent_callback(callback_context: "CallbackContext") -> None:
             # users on the same repo, kept before SYSTEM_PROMPT_DYNAMIC_BOUNDARY.
             callback_context.state["l0_identity"] = mem_data.get("l0_identity", "")
             callback_context.state["_memory_loaded"] = True
+
+            memory_index = mem_data.get("memory_index", [])
+            workspace_path = Path(
+                callback_context.state.get("active_workspace")
+                or os.environ.get("WORKSPACE_ROOT")
+                or os.environ.get("WORKSPACE_DIR", "/tmp/code_agent_workspaces")
+            )
+
+            # ── Gap 2: detect stale topics before first LLM call ─────────────
+            from code_agent.services.memory_preloader import (
+                detect_stale_topics,
+                warm_recent_topics,
+            )
+            stale = await detect_stale_topics(memory_index, workspace_path)
+            if stale:
+                callback_context.state["stale_topics"] = stale
+                _slog.info(
+                    "session.stale_topics_detected",
+                    topics=stale,
+                    session_id=session_id,
+                )
+
+            # ── Gap 4: warm the N most recent topics into memory ──────────────
+            warm_cache = await warm_recent_topics(memory_index, workspace_path)
+            callback_context.state["warm_topics_cache"] = warm_cache
+
             _slog.info(
                 "session.memory_loaded",
-                pointer_count=len(mem_data.get("memory_index", [])),
+                pointer_count=len(memory_index),
+                stale_count=len(stale),
+                warm_count=len(warm_cache),
                 session_id=session_id,
             )
         except Exception as exc:
@@ -261,7 +289,42 @@ async def before_model_callback(
         except Exception as exc:
             _slog.warning("callback.context_check_error", error=str(exc))
 
-    # ── 3b. Inject context into system instruction ────────────────────────────
+    # ── 3b. Gap 1: proactive L2 injection on first user message ─────────────
+    # Front-run the agent's own recall_topic decision by keyword-matching the
+    # user's message against the L1 pointer index.  Only fires once per session
+    # (subsequent turns let the agent decide what else to load).
+    if not callback_context.state.get("_l2_injected"):
+        user_text = _get_latest_user_text(llm_request)
+        if user_text:
+            try:
+                from code_agent.services.memory_preloader import (
+                    match_topics_to_query,
+                    preload_matched_topics,
+                    format_proactive_context,
+                )
+                memory_index = callback_context.state.get("memory_index", [])
+                warm_cache = callback_context.state.get("warm_topics_cache", {})
+                matched = match_topics_to_query(user_text, memory_index)[:2]
+                if matched:
+                    class _FakeCtxL2:  # type: ignore[no-redef]
+                        state = callback_context.state
+
+                    contents = await preload_matched_topics(matched, warm_cache, _FakeCtxL2())  # type: ignore[arg-type]
+                    stale_topics: set[str] = set(callback_context.state.get("stale_topics", []))
+                    if contents:
+                        callback_context.state["proactive_context"] = format_proactive_context(
+                            contents, stale_topics
+                        )
+                        _slog.info(
+                            "callback.l2_proactive_injected",
+                            topics=list(contents.keys()),
+                            session_id=session_id,
+                        )
+                callback_context.state["_l2_injected"] = True
+            except Exception as exc:
+                _slog.debug("callback.l2_proactive_error", error=str(exc))
+
+    # ── 3c. Inject context into system instruction ────────────────────────────
     _inject_context_into_system_instruction(callback_context, llm_request)
 
     # ── 3c. Prompt-injection guard ────────────────────────────────────────────
@@ -385,9 +448,16 @@ async def after_tool_callback(
     args: dict[str, Any],
     tool_context: "ToolContext",
     tool_response: dict[str, Any],
-) -> None:
-    """Append an entry to the per-invocation audit trail in session state."""
+) -> Optional[dict[str, Any]]:
+    """Append audit entry and summarise large tool results (Gap 3).
+
+    Large results from verbose tools (git_log, search, diff, etc.) are
+    truncated before they enter the conversation history to prevent token
+    bloat.  The full result is always written to the audit trail first.
+    """
     tool_name: str = getattr(tool, "name", str(tool))
+
+    # Always log the full result to the audit trail
     audit: list[dict] = tool_context.state.setdefault("tool_audit", [])
     audit.append(
         {
@@ -396,6 +466,18 @@ async def after_tool_callback(
             "ts_ms": int(time.time() * 1000),
         }
     )
+
+    # Gap 3: truncate verbose tool results before they enter conversation history
+    summarised = _summarise_tool_result(tool_name, tool_response)
+    if summarised is not tool_response:
+        logger.debug(
+            "[tool:%s] result summarised — original=%d summarised=%d chars",
+            tool_name,
+            len(str(tool_response)),
+            len(str(summarised)),
+        )
+        return summarised
+
     logger.debug("[tool:%s] completed — response len=%d", tool_name, len(str(tool_response)))
     return None
 
@@ -482,6 +564,7 @@ def _inject_context_into_system_instruction(
                     new_text = text
                     for placeholder, value in replacements.items():
                         new_text = new_text.replace(placeholder, value)
+                    new_text = _append_proactive_context(new_text, proactive)
                     if new_text != text:
                         part.text = new_text
             return
@@ -491,8 +574,91 @@ def _inject_context_into_system_instruction(
             new_si = si
             for placeholder, value in replacements.items():
                 new_si = new_si.replace(placeholder, value)
+            new_si = _append_proactive_context(new_si, proactive)
             if new_si != si:
                 config.system_instruction = new_si
     except Exception as exc:
         # Never let context injection crash the agent
         logger.debug("Context injection skipped: %s", exc)
+
+
+def _append_proactive_context(system_instruction: str, proactive: str) -> str:
+    """Append pre-loaded L2 topic content after the dynamic boundary."""
+    if not proactive:
+        return system_instruction
+    from code_agent.services.prompt_builder import SYSTEM_PROMPT_DYNAMIC_BOUNDARY
+    marker = "## Pre-loaded Memory (L2)"
+    if marker in system_instruction:
+        return system_instruction  # already injected this call
+    if SYSTEM_PROMPT_DYNAMIC_BOUNDARY in system_instruction:
+        return system_instruction + f"\n\n{marker}\n{proactive}"
+    return system_instruction + f"\n\n{marker}\n{proactive}"
+
+
+def _get_latest_user_text(llm_request: "LlmRequest") -> str:
+    """Extract the text of the most recent user turn from the LLM request."""
+    try:
+        contents = getattr(llm_request, "contents", None) or []
+        for content in reversed(contents):
+            if getattr(content, "role", "") != "user":
+                continue
+            for part in getattr(content, "parts", []) or []:
+                text = getattr(part, "text", "") or ""
+                if text.strip():
+                    return text
+    except Exception:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 — tool result summarisation
+# ---------------------------------------------------------------------------
+
+# Tools whose output regularly exceeds useful density
+_VERBOSE_TOOLS: frozenset[str] = frozenset({
+    "git_log", "git_diff", "git_show", "git_blame",
+    "search_in_files", "grep_code",
+    "semantic_search", "lexical_search", "hybrid_search",
+    "get_repo_file_tree", "find_files", "find_symbol_references",
+})
+
+_TOOL_RESULT_MAX_CHARS = 2_000  # ~500 tokens; full result preserved in audit log
+
+
+def _summarise_tool_result(
+    tool_name: str,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a token-capped version of *response* for verbose tools.
+
+    The original response is always written to the audit trail before this
+    function is called — this copy is only what enters the conversation history.
+    Non-verbose tools and small results are returned unchanged (same object).
+    """
+    if tool_name not in _VERBOSE_TOOLS:
+        return response
+    if not isinstance(response, dict):
+        return response
+
+    full_str = str(response)
+    if len(full_str) <= _TOOL_RESULT_MAX_CHARS:
+        return response
+
+    # Walk keys and truncate values until we hit the budget
+    summarised: dict[str, Any] = {}
+    chars_used = 0
+    for key, value in response.items():
+        v_str = str(value)
+        remaining = _TOOL_RESULT_MAX_CHARS - chars_used
+        if remaining <= 0:
+            summarised["_truncated"] = True
+            break
+        if len(v_str) > remaining:
+            summarised[key] = v_str[:remaining] + f"… [{len(v_str) - remaining} chars omitted]"
+            summarised["_truncated"] = True
+            break
+        summarised[key] = value
+        chars_used += len(v_str)
+
+    return summarised
