@@ -42,6 +42,13 @@ if TYPE_CHECKING:
     from google.adk.tools.base_tool import BaseTool
     from google.adk.tools.tool_context import ToolContext
 
+from code_agent.guardrails import (
+    injection_guard_before_model,       # Layer 2a
+    secret_redaction_after_model,       # Layer 2b
+    tool_payload_guard_before_tool,     # Layer 2c
+    secret_redaction_after_tool,        # Layer 2d
+)
+
 logger = logging.getLogger(__name__)
 _slog: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -63,19 +70,6 @@ _BLOCKED_SHELL_PATTERNS: list[str] = [
     "> /dev/sda",
     "chmod -R 777 /",
     "chown -R root /",
-]
-
-# Lightweight prompt-injection heuristics to catch the most obvious attempts
-_INJECTION_PHRASES: list[str] = [
-    "ignore previous instructions",
-    "ignore all previous",
-    "disregard your instructions",
-    "you are now",
-    "new persona",
-    "pretend you are",
-    "act as an unrestricted",
-    "jailbreak",
-    "DAN mode",
 ]
 
 # State key used to track cumulative LLM calls per invocation
@@ -327,25 +321,10 @@ async def before_model_callback(
     # ── 3c. Inject context into system instruction ────────────────────────────
     _inject_context_into_system_instruction(callback_context, llm_request)
 
-    # ── 3c. Prompt-injection guard ────────────────────────────────────────────
-    injection_match = _check_prompt_injection(llm_request)
-    if injection_match:
-        logger.warning(
-            "[model-guard] prompt injection detected: %r — blocking LLM call",
-            injection_match,
-        )
-        blocked = LlmResponse(
-            content=genai_types.Content(
-                role="model",
-                parts=[genai_types.Part(
-                    text=(
-                        "I'm unable to process that request as it appears to "
-                        "attempt to override my instructions."
-                    )
-                )],
-            )
-        )
-        return blocked
+    # ── 3d. Prompt-injection guard (Layer 2a) ─────────────────────────────────
+    injection_response = injection_guard_before_model(callback_context, llm_request)
+    if injection_response is not None:
+        return injection_response
 
     # ── 3d. LLM call-count guard ──────────────────────────────────────────────
     call_count = callback_context.state.get(_TOKEN_CALL_KEY, 0) + 1
@@ -384,8 +363,8 @@ async def before_model_callback(
 async def after_model_callback(
     callback_context: "CallbackContext",
     llm_response: "LlmResponse",
-) -> None:
-    """Log the LLM response for observability (token usage if available)."""
+) -> "Optional[LlmResponse]":
+    """Log token usage, then apply Layer 2b secret redaction."""
     try:
         usage = getattr(llm_response, "usage_metadata", None)
         if usage:
@@ -398,7 +377,8 @@ async def after_model_callback(
             )
     except Exception:
         pass  # never let logging crash the agent
-    return None
+    # Layer 2b: redact any secrets that leaked into the model response.
+    return secret_redaction_after_model(callback_context, llm_response)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +397,11 @@ async def before_tool_callback(
     (the tool is never invoked).
     """
     tool_name: str = getattr(tool, "name", str(tool))
+
+    # Layer 2c: block any tool call with dangerous payload in its string args.
+    payload_block = tool_payload_guard_before_tool(tool, args, tool_context)
+    if payload_block is not None:
+        return payload_block
 
     if tool_name in ("run_command", "run_script"):
         cmd: str = args.get("command", "") or args.get("script", "")
@@ -448,12 +433,12 @@ async def after_tool_callback(
     args: dict[str, Any],
     tool_context: "ToolContext",
     tool_response: dict[str, Any],
-) -> Optional[dict[str, Any]]:
-    """Append audit entry and summarise large tool results (Gap 3).
+) -> "Optional[dict[str, Any]]":
+    """Audit trail, Gap-3 summarisation, and Layer 2d secret redaction.
 
-    Large results from verbose tools (git_log, search, diff, etc.) are
-    truncated before they enter the conversation history to prevent token
-    bloat.  The full result is always written to the audit trail first.
+    1. Writes full result to the audit trail unconditionally.
+    2. Truncates verbose tool results (Gap 3) before they enter conversation history.
+    3. Applies secret redaction (Layer 2d) to whatever is returned to the LLM.
     """
     tool_name: str = getattr(tool, "name", str(tool))
 
@@ -479,7 +464,8 @@ async def after_tool_callback(
         return summarised
 
     logger.debug("[tool:%s] completed — response len=%d", tool_name, len(str(tool_response)))
-    return None
+    # Layer 2d: redact any credentials that appeared in tool output.
+    return secret_redaction_after_tool(tool, args, tool_context, tool_response)
 
 
 # ---------------------------------------------------------------------------
@@ -489,23 +475,6 @@ async def after_tool_callback(
 def _truncate_args(args: dict[str, Any], max_len: int = 120) -> dict[str, str]:
     """Return a copy of *args* with each value truncated to *max_len* chars."""
     return {k: str(v)[:max_len] for k, v in args.items()}
-
-
-def _check_prompt_injection(llm_request: "LlmRequest") -> str | None:
-    """Return the matched injection phrase, or None if the request looks safe."""
-    try:
-        for content in llm_request.contents or []:
-            if getattr(content, "role", "") != "user":
-                continue
-            for part in getattr(content, "parts", []) or []:
-                text: str = getattr(part, "text", "") or ""
-                lower = text.lower()
-                for phrase in _INJECTION_PHRASES:
-                    if phrase in lower:
-                        return phrase
-    except Exception:
-        pass
-    return None
 
 
 def _inject_context_into_system_instruction(
@@ -526,6 +495,7 @@ def _inject_context_into_system_instruction(
     active_repo = callback_context.state.get("active_repo") or "Not set — ask the user for a repository path or URL"
     active_workspace = callback_context.state.get("active_workspace") or "Not set"
     custom_instructions = callback_context.state.get("custom_instructions") or ""
+    proactive = callback_context.state.get("proactive_context", "")
 
     # L0/L1 memory layer placeholders
     # {l0_project_summary} → static section (before boundary, maximises cache hits)

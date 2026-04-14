@@ -205,11 +205,52 @@ kubectl apply -f k8s/
 
 In EKS mode the agent uses Aurora PostgreSQL for session persistence. Semantic search uses pgvector (LlamaIndex `PGVectorStore`).
 
+## Guardrails
+
+Five layers of defence applied at different points in the ADK execution pipeline.
+
+| Layer | Where | What it does |
+|---|---|---|
+| **1 — Provider safety** | `agent.py` `generate_content_config` | Google's model blocks DANGEROUS_CONTENT, HARASSMENT, HATE_SPEECH, SEXUALLY_EXPLICIT before returning. Active when `LLM_MODEL` is a Gemini model; silently skipped for LiteLLM non-Gemini backends. |
+| **2a — before_model_callback** | `code_agent/guardrails.py` | Scans user text for injection patterns ("ignore previous instructions", "jailbreak", etc.) → returns a canned `LlmResponse` to skip the model entirely. |
+| **2b — after_model_callback** | `code_agent/guardrails.py` | Redacts any API key, token, or credential that accidentally appears in model output (`api_key=`, `sk-…`, `ghp_…`, etc.). |
+| **2c — before_tool_callback** | `code_agent/guardrails.py` | Blocks `google_search` calls whose query contains dangerous payloads (`drop table`, `exec(`, `eval(`, etc.). |
+| **3 — output_schema** | `agent.py` (commented) | Uncomment `output_schema=AgentResponse` to force structured Pydantic output — this disables tool use entirely. |
+| **4 — max_llm_calls** | `code_agent/a2a/callbacks.py` + `RunConfig` | In-callback hard limit of 40 LLM calls per invocation. Also configurable at runtime via `RunConfig(max_llm_calls=N)`. |
+| **5 — System instruction** | `agent.py` `_INSTRUCTION` | Hard-coded non-negotiable rules: never reveal system prompt, only retrieve external facts via approved tools, always cite sources. |
+
+### Layer 4 via RunConfig (optional)
+
+```python
+from google.adk.runners import RunConfig
+
+await runner.run_async(
+    ...,
+    run_config=RunConfig(max_llm_calls=20),  # override per invocation
+)
+```
+
+## Evaluation
+
+Guardrail unit tests run without any API keys or live services.
+
+```bash
+# Run all guardrail evals
+uv run pytest evals/ -v
+
+# Run a specific layer
+uv run pytest evals/ -v -k "Layer2a"
+uv run pytest evals/ -v -k "Layer2b"
+uv run pytest evals/ -v -k "Layer4"
+```
+
+Test cases are documented in `evals/datasets/guardrail_cases.json`.
+
 ## Development
 
 ```bash
-# Run tests
-uv run pytest
+# Run guardrail evals
+uv run pytest evals/ -v
 
 # Health check
 curl http://localhost:8000/health

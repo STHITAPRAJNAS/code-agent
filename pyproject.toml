@@ -12,7 +12,10 @@ license = { text = "MIT" }
 authors = [{ name = "Code Agent" }]
 dependencies = [
     "google-adk>=1.27.0",
-    "litellm>=1.40.0",
+    # 1.82.7 and 1.82.8 are compromised (TeamPCP supply-chain attack, 2026-03-24)
+    # — malicious litellm_init.pth steals cloud/crypto credentials on interpreter start.
+    # Pin away from those two releases; safe on anything else >=1.40.0.
+    "litellm>=1.40.0,!=1.82.7,!=1.82.8",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "python-dotenv>=1.0.0",
@@ -68,3 +71,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["code_agent"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["evals"]
