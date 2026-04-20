@@ -23,6 +23,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiofiles"
+version = "25.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/c3/534eac40372d8ee36ef40df62ec129bee4fdb5ad9706e58a29be53b2c970/aiofiles-25.1.0.tar.gz", hash = "sha256:a8d728f0a29de45dc521f18f07297428d56992a742f0cd2701ba86e44d23d5b2", size = 46354, upload-time = "2025-10-09T20:51:04.358Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bc/8a/340a1555ae33d7354dbca4faa54948d76d89a27ceef032c8c3bc661d003e/aiofiles-25.1.0-py3-none-any.whl", hash = "sha256:abe311e527c862958650f9438e859c1fa7568a141b22abcd015e120e86a85695", size = 14668, upload-time = "2025-10-09T20:51:03.174Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -505,6 +514,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
+    { name = "aiofiles" },
     { name = "anyio" },
     { name = "asyncpg" },
     { name = "atlassian-python-api" },
@@ -526,6 +536,7 @@ dependencies = [
     { name = "requests" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sse-starlette" },
+    { name = "structlog" },
     { name = "tree-sitter" },
     { name = "tree-sitter-c" },
     { name = "tree-sitter-cpp" },
@@ -549,6 +560,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", specifier = ">=0.3.25" },
+    { name = "aiofiles", specifier = ">=24.1.0" },
     { name = "anyio", specifier = ">=4.0.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "atlassian-python-api", specifier = ">=3.41.0" },
@@ -559,7 +571,7 @@ requires-dist = [
     { name = "google-adk", specifier = ">=1.27.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "jira", specifier = ">=3.8.0" },
-    { name = "litellm", specifier = ">=1.40.0" },
+    { name = "litellm", specifier = ">=1.40.0,!=1.82.7,!=1.82.8" },
     { name = "llama-index", specifier = ">=0.11.0" },
     { name = "llama-index-vector-stores-postgres", specifier = ">=0.2.0" },
     { name = "pip-audit", specifier = ">=2.7.0" },
@@ -570,6 +582,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.0" },
     { name = "sse-starlette", specifier = ">=2.1.0" },
+    { name = "structlog", specifier = ">=24.0.0" },
     { name = "tree-sitter", specifier = ">=0.23.0" },
     { name = "tree-sitter-c", specifier = ">=0.23.0" },
     { name = "tree-sitter-cpp", specifier = ">=0.23.0" },
@@ -1470,6 +1483,7 @@ dependencies = [
     { name = "griffecli" },
     { name = "griffelib" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/04/56/28a0accac339c164b52a92c6cfc45a903acc0c174caa5c1713803467b533/griffe-2.0.0.tar.gz", hash = "sha256:c68979cd8395422083a51ea7cf02f9c119d889646d99b7b656ee43725de1b80f", size = 293906, upload-time = "2026-03-23T21:06:53.402Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/94/ee21d41e7eb4f823b94603b9d40f86d3c7fde80eacc2c3c71845476dddaa/griffe-2.0.0-py3-none-any.whl", hash = "sha256:5418081135a391c3e6e757a7f3f156f1a1a746cc7b4023868ff7d5e2f9a980aa", size = 5214, upload-time = "2026-02-09T19:09:44.105Z" },
 ]
@@ -1482,6 +1496,7 @@ dependencies = [
     { name = "colorama" },
     { name = "griffelib" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/f8/2e129fd4a86e52e58eefe664de05e7d502decf766e7316cc9e70fdec3e18/griffecli-2.0.0.tar.gz", hash = "sha256:312fa5ebb4ce6afc786356e2d0ce85b06c1c20d45abc42d74f0cda65e159f6ef", size = 56213, upload-time = "2026-03-23T21:06:54.8Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/ed/d93f7a447bbf7a935d8868e9617cbe1cadf9ee9ee6bd275d3040fbf93d60/griffecli-2.0.0-py3-none-any.whl", hash = "sha256:9f7cd9ee9b21d55e91689358978d2385ae65c22f307a63fb3269acf3f21e643d", size = 9345, upload-time = "2026-02-09T19:09:42.554Z" },
 ]
@@ -1490,6 +1505,7 @@ wheels = [
 name = "griffelib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/06/eccbd311c9e2b3ca45dbc063b93134c57a1ccc7607c5e545264ad092c4a9/griffelib-2.0.0.tar.gz", hash = "sha256:e504d637a089f5cab9b5daf18f7645970509bf4f53eda8d79ed71cce8bd97934", size = 166312, upload-time = "2026-03-23T21:06:55.954Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/51/c936033e16d12b627ea334aaaaf42229c37620d0f15593456ab69ab48161/griffelib-2.0.0-py3-none-any.whl", hash = "sha256:01284878c966508b6d6f1dbff9b6fa607bc062d8261c5c7253cb285b06422a7f", size = 142004, upload-time = "2026-02-09T19:09:40.561Z" },
 ]
@@ -3751,6 +3767,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/6d/90764092216fa560f6587f83bb70113a8ba510ba436c6476a2b47359057c/stevedore-5.7.0.tar.gz", hash = "sha256:31dd6fe6b3cbe921e21dcefabc9a5f1cf848cf538a1f27543721b8ca09948aa3", size = 516200, upload-time = "2026-02-20T13:27:06.765Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/69/06/36d260a695f383345ab5bbc3fd447249594ae2fa8dfd19c533d5ae23f46b/stevedore-5.7.0-py3-none-any.whl", hash = "sha256:fd25efbb32f1abb4c9e502f385f0018632baac11f9ee5d1b70f88cc5e22ad4ed", size = 54483, upload-time = "2026-02-20T13:27:05.561Z" },
+]
+
+[[package]]
+name = "structlog"
+version = "25.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
 ]
 
 [[package]]
