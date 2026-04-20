@@ -160,6 +160,19 @@ async def before_agent_callback(callback_context: "CallbackContext") -> None:
             warm_cache = await warm_recent_topics(memory_index, workspace_path)
             callback_context.state["warm_topics_cache"] = warm_cache
 
+            # ── Code graph: build or load from cache ─────────────────────────
+            try:
+                from code_agent.services.code_graph import (
+                    load_or_rebuild_graph,
+                    format_graph_context,
+                )
+                graph = await load_or_rebuild_graph(workspace_path)
+                if graph is not None:
+                    callback_context.state["code_graph"] = graph
+                    callback_context.state["graph_context"] = format_graph_context(graph)
+            except Exception as exc:
+                _slog.debug("session.code_graph_error", error=str(exc))
+
             _slog.info(
                 "session.memory_loaded",
                 pointer_count=len(memory_index),
@@ -496,6 +509,7 @@ def _inject_context_into_system_instruction(
     active_workspace = callback_context.state.get("active_workspace") or "Not set"
     custom_instructions = callback_context.state.get("custom_instructions") or ""
     proactive = callback_context.state.get("proactive_context", "")
+    graph_context = callback_context.state.get("graph_context", "")
 
     # L0/L1 memory layer placeholders
     # {l0_project_summary} → static section (before boundary, maximises cache hits)
@@ -535,6 +549,7 @@ def _inject_context_into_system_instruction(
                     for placeholder, value in replacements.items():
                         new_text = new_text.replace(placeholder, value)
                     new_text = _append_proactive_context(new_text, proactive)
+                    new_text = _append_graph_context(new_text, graph_context)
                     if new_text != text:
                         part.text = new_text
             return
@@ -545,6 +560,7 @@ def _inject_context_into_system_instruction(
             for placeholder, value in replacements.items():
                 new_si = new_si.replace(placeholder, value)
             new_si = _append_proactive_context(new_si, proactive)
+            new_si = _append_graph_context(new_si, graph_context)
             if new_si != si:
                 config.system_instruction = new_si
     except Exception as exc:
@@ -563,6 +579,16 @@ def _append_proactive_context(system_instruction: str, proactive: str) -> str:
     if SYSTEM_PROMPT_DYNAMIC_BOUNDARY in system_instruction:
         return system_instruction + f"\n\n{marker}\n{proactive}"
     return system_instruction + f"\n\n{marker}\n{proactive}"
+
+
+def _append_graph_context(system_instruction: str, graph_context: str) -> str:
+    """Append the compact code-graph summary after the dynamic section."""
+    if not graph_context:
+        return system_instruction
+    marker = "## Codebase Graph"
+    if marker in system_instruction:
+        return system_instruction  # already injected this call
+    return system_instruction + f"\n\n{marker}\n{graph_context}"
 
 
 def _get_latest_user_text(llm_request: "LlmRequest") -> str:
